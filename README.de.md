@@ -56,6 +56,19 @@ Nach der Installation alles mit `/agy:setup` prüfen.
 
 Danach Claude Code neu starten und `/agy:setup` ausführen.
 
+## Aktualisieren
+
+Das Plugin verteilt sich über GitHub, sodass alle die neuesten Fixes erhalten:
+
+```
+/plugin update agy
+```
+
+Danach Claude Code neu starten. (CLI-Äquivalent: `claude plugin update agy`.) Meldet
+ein Befehl, dass das Transkriptformat von agy nicht erkannt wurde, hat sich die
+zugrunde liegende `agy`-CLI geändert — führe das Update oben aus, um das gepatchte
+Plugin zu erhalten.
+
 ## Funktionsweise
 
 `scripts/agy-companion.mjs` ruft `agy --print` mit der korrekten Flag-Reihenfolge auf,

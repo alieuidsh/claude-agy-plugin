@@ -57,6 +57,19 @@ Après l'installation, vérifiez tout avec `/agy:setup`.
 
 Puis redémarrez Claude Code et exécutez `/agy:setup`.
 
+## Mise à jour
+
+Le plugin se distribue via GitHub, donc tout le monde peut récupérer les derniers correctifs :
+
+```
+/plugin update agy
+```
+
+Puis redémarrez Claude Code. (Équivalent CLI : `claude plugin update agy`.) Si une
+commande signale que le format de transcript d'agy n'est pas reconnu, c'est que la
+CLI `agy` sous-jacente a changé — lancez la mise à jour ci-dessus pour obtenir le
+plugin corrigé.
+
 ## Fonctionnement
 
 `scripts/agy-companion.mjs` lance `agy --print` avec le bon ordre des drapeaux,

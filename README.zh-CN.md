@@ -52,6 +52,18 @@
 
 然后重启 Claude Code，执行 `/agy:setup`。
 
+## 更新
+
+这个插件通过 GitHub 自动分发，所以大家都能拉到最新修复：
+
+```
+/plugin update agy
+```
+
+然后重启 Claude Code。（CLI 等效命令：`claude plugin update agy`。）如果某个命令
+报告「agy transcript 格式无法识别」，说明底层 `agy` CLI 改版了 —— 运行上面的更新就会
+拿到修好的插件。
+
 ## 工作原理
 
 `scripts/agy-companion.mjs` 用正确的标志顺序运行 `agy --print`，带超时等待，再从

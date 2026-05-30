@@ -109,16 +109,22 @@ function runAgy(prompt, { workdir = process.cwd(), timeoutMs = DEFAULT_TIMEOUT_M
     const finishFromTranscript = (exitInfo) => {
       // Give agy a beat to flush the transcript, then extract THIS run's answer.
       setTimeout(() => {
-        let answer = null;
-        try { answer = extractAnswer(startedAt - 3000, nonce); } catch (e) {
+        let res;
+        try { res = extractAnswer(startedAt - 3000, nonce); } catch (e) {
           done({ ok: false, error: `failed to read agy transcript: ${e.message}` });
           return;
         }
-        if (answer == null) {
-          const hint = stderr.trim() ? ` agy stderr: ${stderr.trim().slice(0, 300)}` : "";
-          done({ ok: false, error: `agy produced no matching response${exitInfo ? ` (${exitInfo})` : ""}.${hint}` });
+        if (res.answer == null) {
+          if (res.formatDrift) {
+            // We found OUR run's transcript but couldn't parse a response: agy's
+            // output format probably changed. Tell the user to update the plugin.
+            done({ ok: false, error: "agy ran but its transcript format wasn't recognized — the agy CLI may have changed. Update this plugin: `claude plugin update agy` (then restart). If it persists, the plugin needs a new release." });
+          } else {
+            const hint = stderr.trim() ? ` agy stderr: ${stderr.trim().slice(0, 300)}` : "";
+            done({ ok: false, error: `agy produced no matching response${exitInfo ? ` (${exitInfo})` : ""}.${hint}` });
+          }
         } else {
-          done({ ok: true, answer });
+          done({ ok: true, answer: res.answer });
         }
       }, 1200);
     };
@@ -167,11 +173,14 @@ function killTree(pid) {
 }
 
 // ---------- read agy's answer from this run's transcript ----------
-// If a nonce is given, ONLY accept transcripts whose USER_INPUT contains it, and
-// join ALL of that session's MODEL responses in created_at order (agy chunks long
-// answers). Without a nonce, fall back to the newest single response since `sinceMs`.
+// Returns { answer, formatDrift }:
+//   answer      — the joined MODEL response text, or null if not found
+//   formatDrift — true when we located THIS run's transcript (our nonce is in it,
+//                 so agy DID run our prompt) but found no MODEL response in the
+//                 expected shape. That strongly implies agy changed its transcript
+//                 format → the plugin needs updating, NOT an auth/timeout problem.
 function extractAnswer(sinceMs, nonce) {
-  if (!existsSync(BRAIN)) return null;
+  if (!existsSync(BRAIN)) return { answer: null, formatDrift: false };
   const files = [];
   const stack = [BRAIN];
   while (stack.length) {
@@ -194,6 +203,7 @@ function extractAnswer(sinceMs, nonce) {
     // the MODEL responses belonging to THIS run: the rows from our matching
     // USER_INPUT up to (but not including) the next USER_INPUT. This prevents
     // bleed-in if agy appends multiple runs to one transcript file.
+    let foundMyTranscript = false;
     for (const f of files) {
       let rows;
       try { rows = parseJsonl(f); } catch { continue; }
@@ -203,6 +213,7 @@ function extractAnswer(sinceMs, nonce) {
         (o) => o.type === "USER_INPUT" && typeof o.content === "string" && o.content.includes(nonce),
       );
       if (startIdx === -1) continue;
+      foundMyTranscript = true; // our prompt reached agy and was logged
       let endIdx = rows.length;
       for (let i = startIdx + 1; i < rows.length; i++) {
         if (rows[i].type === "USER_INPUT") { endIdx = i; break; }
@@ -211,9 +222,12 @@ function extractAnswer(sinceMs, nonce) {
         .filter((o) => o.type === "PLANNER_RESPONSE" && o.source === "MODEL" && o.content)
         .map((o) => o.content.trim())
         .filter(Boolean);
-      if (segs.length) return segs.join("\n\n");
+      if (segs.length) return { answer: segs.join("\n\n"), formatDrift: false };
     }
-    return null; // nonce given but no matching transcript → don't return a stale answer
+    // Nonce given: if we found our transcript but no expected MODEL rows, the
+    // transcript schema likely changed → signal formatDrift so the caller can
+    // tell the user to update the plugin instead of guessing it's an auth issue.
+    return { answer: null, formatDrift: foundMyTranscript };
   }
 
   // No nonce: newest single MODEL response across recent transcripts.
@@ -228,7 +242,7 @@ function extractAnswer(sinceMs, nonce) {
       }
     }
   }
-  return best;
+  return { answer: best, formatDrift: false };
 }
 
 function parseJsonl(file) {
