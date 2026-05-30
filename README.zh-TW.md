@@ -5,7 +5,12 @@
 讓 Claude 呼叫本機 **`agy`** CLI（Google Antigravity，Gemini 後端）來審查程式碼、
 委派任務、提供第二意見的 Claude Code plugin —— **官方 `codex` plugin 的 agy 對應版**。
 
-跨平台：**Windows、Linux、macOS**（純 Node companion，不依賴特定 shell）。
+> **非官方社群 plugin。** 與 Google、Anthropic 無關。它依賴本機安裝的 `agy` CLI，
+> 並解析它寫在磁碟上的 transcript 格式（這不是穩定的公開 API）—— 實際驗證過的範圍
+> 見 [TEST_MATRIX.md](TEST_MATRIX.md)。
+
+跨平台：**Windows、Linux、macOS**（純 Node companion）。目前主要在 Windows 上測試；
+路徑偵測涵蓋常見的 Windows/macOS/Linux 配置，agy 裝在別處可設 `AGY_BIN`。
 
 ## 指令
 

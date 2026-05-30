@@ -5,7 +5,12 @@
 让 Claude 调用本机 **`agy`** CLI（Google Antigravity，Gemini 后端）来审查代码、
 委派任务、提供第二意见的 Claude Code 插件 —— **官方 `codex` 插件的 agy 对应版**。
 
-跨平台：**Windows、Linux、macOS**（纯 Node companion，不依赖特定 shell）。
+> **非官方社区插件。** 与 Google、Anthropic 无关。它依赖本机安装的 `agy` CLI，
+> 并解析它写在磁盘上的 transcript 格式（这不是稳定的公开 API）—— 实际验证过的范围
+> 见 [TEST_MATRIX.md](TEST_MATRIX.md)。
+
+跨平台：**Windows、Linux、macOS**（纯 Node companion）。目前主要在 Windows 上测试；
+路径检测涵盖常见的 Windows/macOS/Linux 配置，agy 装在别处可设 `AGY_BIN`。
 
 ## 命令
 

@@ -6,7 +6,14 @@ Un plugin per Claude Code che consente a Claude di chiamare la CLI locale **`agy
 (Google Antigravity, basata su Gemini) per revisionare codice, delegare attività e
 ottenere una seconda opinione — l'**equivalente agy del plugin ufficiale `codex`**.
 
-Multipiattaforma: **Windows, Linux, macOS** (companion Node puro, senza wrapper di shell).
+> **Plugin community non ufficiale.** Non affiliato a Google o Anthropic. Dipende
+> dalla CLI `agy` installata localmente e analizza il suo formato di transcript su
+> disco (non è un'API pubblica stabile) — vedi [TEST_MATRIX.md](TEST_MATRIX.md) per
+> ciò che è stato effettivamente verificato.
+
+Multipiattaforma: **Windows, Linux, macOS** (companion Node puro). Finora testato
+principalmente su Windows; il rilevamento dei percorsi copre i layout comuni
+Windows/macOS/Linux e puoi impostare `AGY_BIN` se `agy` è altrove.
 
 ## Comandi
 

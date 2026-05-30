@@ -6,7 +6,14 @@ Un plugin Claude Code qui permet à Claude d'appeler la CLI locale **`agy`** (Go
 Antigravity, basé sur Gemini) pour relire du code, déléguer des tâches et obtenir un
 deuxième avis — l'**équivalent agy du plugin officiel `codex`**.
 
-Multiplateforme : **Windows, Linux, macOS** (companion Node pur, sans wrapper shell).
+> **Plugin communautaire non officiel.** Sans lien avec Google ni Anthropic. Il
+> dépend de la CLI `agy` installée localement et analyse son format de transcript sur
+> disque (ce n'est pas une API publique stable) — voir [TEST_MATRIX.md](TEST_MATRIX.md)
+> pour ce qui a réellement été vérifié.
+
+Multiplateforme : **Windows, Linux, macOS** (companion Node pur). Testé principalement
+sur Windows pour l'instant ; la détection de chemin couvre les emplacements courants
+Windows/macOS/Linux, et vous pouvez définir `AGY_BIN` si `agy` est ailleurs.
 
 ## Commandes
 

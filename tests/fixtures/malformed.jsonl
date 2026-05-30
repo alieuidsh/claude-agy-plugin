@@ -1,0 +1,4 @@
+{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","content":"[run:NONCE_MAL]\nWith junk lines."}
+this is not valid json at all
+{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","content":"Survived the junk lines."}
+{ truncated broken line

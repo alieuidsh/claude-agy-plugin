@@ -27,7 +27,7 @@
 //  3. agy may split a long answer across MANY PLANNER_RESPONSE entries; we join
 //     all of this run's entries (correlated by a per-job nonce), not just one.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync,
 } from "node:fs";
@@ -331,14 +331,18 @@ function writeMeta(id, m) { writeFileSync(jobMetaPath(id), JSON.stringify(m, nul
 function readMeta(id) { return JSON.parse(readFileSync(jobMetaPath(id), "utf8")); }
 
 // ---------- git helpers (for review commands) ----------
-function git(args) {
-  try { return execSync(`git ${args}`, { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 }); }
-  catch { return ""; }
+// argv-array form (spawnSync, shell:false) — no string interpolation, so a branch
+// name / pathspec added later can never inject. Matches the spawn() style elsewhere.
+function git(argv) {
+  try {
+    const r = spawnSync("git", argv, { encoding: "utf8", maxBuffer: 20 * 1024 * 1024, shell: false });
+    return r.status === 0 && typeof r.stdout === "string" ? r.stdout : "";
+  } catch { return ""; }
 }
 function collectDiff() {
-  const status = git("status --short --untracked-files=all");
-  const staged = git("diff --cached");
-  const unstaged = git("diff");
+  const status = git(["status", "--short", "--untracked-files=all"]);
+  const staged = git(["diff", "--cached"]);
+  const unstaged = git(["diff"]);
   return { status, diff: (staged + "\n" + unstaged).trim() };
 }
 
@@ -522,11 +526,30 @@ function notInstalledHint() {
   ].join("\n");
 }
 
-// `install` subcommand: run the official installer for this OS, then verify.
-async function cmdInstall() {
+// `check-install`: NEVER installs — only reports state + the official command.
+// This is the safe default; the slash command runs this first.
+function cmdCheckInstall() {
+  const existing = findAgy();
+  if (existing) { console.log(`INSTALLED: ${existing}`); return 0; }
+  console.log("NOT_INSTALLED");
+  console.log(notInstalledHint());
+  return 0; // not an error — just a status report
+}
+
+// `install`: runs the official remote installer — but ONLY with explicit --yes.
+// Without --yes it refuses and just prints what it would do. This guards against
+// a mis-step ever turning a "check" into "download & execute a remote script".
+async function cmdInstall(confirmed) {
   const existing = findAgy();
   if (existing) { console.log(`agy is already installed at: ${existing}`); return 0; }
   const cmd = officialInstallCmd();
+  if (!confirmed) {
+    console.log("Refusing to install without confirmation.");
+    console.log("This would download and execute the official installer:");
+    console.log(`  ${cmd}`);
+    console.log("Re-run with --yes to proceed:  /agy:install (it will ask first), or `... install --yes`.");
+    return 2;
+  }
   console.log(`Installing the agy CLI via the official installer:\n  ${cmd}\n`);
   try {
     // Inherit stdio so the user can see the installer's progress/prompts.
@@ -554,15 +577,17 @@ async function cmdInstall() {
 // ---------- arg parsing (flags only; prompt comes from stdin) ----------
 // `writeOverride`: null = use the subcommand's safe default; true = --write forces
 // write-capable; false = --read-only forces read-only. Mirrors codex's model of a
+// (parseFlags also recognizes --yes for the install subcommand.)
 // safe default that the user can explicitly override.
 function parseFlags(rest) {
-  const out = { background: false, wait: false, timeoutMs: DEFAULT_TIMEOUT_MS, writeOverride: null };
+  const out = { background: false, wait: false, timeoutMs: DEFAULT_TIMEOUT_MS, writeOverride: null, yes: false };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === "--background") out.background = true;
     else if (a === "--wait") out.wait = true;
     else if (a === "--write") out.writeOverride = true;
     else if (a === "--read-only" || a === "--readonly") out.writeOverride = false;
+    else if (a === "--yes" || a === "-y") out.yes = true;
     else if (a === "--timeout" && rest[i + 1]) {
       const secs = parseInt(rest[++i], 10);
       if (Number.isFinite(secs) && secs > 0) {
@@ -581,10 +606,21 @@ function resolveReadOnly(defaultReadOnly, writeOverride) {
   return defaultReadOnly;                     // subcommand default
 }
 
+// Exported for unit tests (fixtures). Importing this module does NOT run main()
+// thanks to the isMain guard below, so tests can call these pure functions safely.
+export { extractAnswer, extractFromRows, heuristicAnswer, parseFlags, resolveReadOnly };
+
 // ---------- main ----------
+// Only run the CLI when executed directly (node agy-companion.mjs ...), not when
+// imported by a test. argv[1] is the script path; compare to this module's URL.
+const isMain = (() => {
+  try { return process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, "/")}`).href; }
+  catch { return true; }
+})();
+
 const [, , sub, ...rest] = process.argv;
 const cwd = process.cwd();
-(async () => {
+async function main() {
   let code = 0;
   const f = parseFlags(rest);
   const stdinText = ["ask", "task", "rescue", "research", "review", "adversarial-review"].includes(sub) ? readStdin() : "";
@@ -609,22 +645,25 @@ const cwd = process.cwd();
       code = await run("research", `Research the following and give a synthesized, well-structured answer with concrete details:\n\n${stdinText}`, /*defaultReadOnly*/ true);
       break;
     case "review": {
+      // Review is ALWAYS read-only — agy never edits during a review, even if the
+      // user passes --write. Use /agy:rescue to act on review findings.
       const { diff } = collectDiff();
-      code = await run("review", reviewPrompt(stdinText, diff, false), /*defaultReadOnly*/ true);
+      code = await runJob("review", reviewPrompt(stdinText, diff, false), { workdir: "", timeoutMs: f.timeoutMs, readOnly: true });
       break;
     }
     case "adversarial-review": {
       const { diff } = collectDiff();
-      code = await run("adversarial-review", reviewPrompt(stdinText, diff, true), /*defaultReadOnly*/ true);
+      code = await runJob("adversarial-review", reviewPrompt(stdinText, diff, true), { workdir: "", timeoutMs: f.timeoutMs, readOnly: true });
       break;
     }
     case "setup": code = await cmdSetup(); break;
-    case "install": code = await cmdInstall(); break;
+    case "check-install": code = cmdCheckInstall(); break;
+    case "install": code = await cmdInstall(f.yes); break;
     case "status": code = cmdStatus(); break;
     case "result": code = cmdResult(rest[0]); break;
     case "cancel": code = cmdCancel(rest[0]); break;
     default:
-      console.error(`Unknown subcommand: ${sub || "(none)"}\nValid: ask task research review adversarial-review setup install status result cancel`);
+      console.error(`Unknown subcommand: ${sub || "(none)"}\nValid: ask task research review adversarial-review setup check-install install status result cancel`);
       code = 2;
   }
   process.exitCode = code; // let stdout flush naturally instead of hard process.exit

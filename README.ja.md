@@ -6,7 +6,13 @@
 コードレビュー・タスク委譲・セカンドオピニオンを得るための Claude Code プラグイン。
 **公式 `codex` プラグインの agy 版**です。
 
-クロスプラットフォーム：**Windows、Linux、macOS**（純粋な Node コンパニオン、シェル依存なし）。
+> **非公式コミュニティプラグイン。** Google・Anthropic とは無関係です。ローカルに
+> インストールされた `agy` CLI に依存し、ディスク上の transcript 形式（安定した公開
+> API ではありません）を解析します — 実際に検証済みの範囲は [TEST_MATRIX.md](TEST_MATRIX.md) を参照。
+
+クロスプラットフォーム：**Windows、Linux、macOS**（純粋な Node コンパニオン）。現状は
+主に Windows でテスト済み。パス検出は一般的な Windows/macOS/Linux 配置に対応し、`agy`
+が別の場所にある場合は `AGY_BIN` を設定できます。
 
 ## コマンド
 

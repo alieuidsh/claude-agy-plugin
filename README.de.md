@@ -6,7 +6,14 @@ Ein Claude-Code-Plugin, mit dem Claude die lokale **`agy`**-CLI (Google Antigrav
 auf Gemini-Basis) aufruft, um Code zu reviewen, Aufgaben zu delegieren und eine
 Zweitmeinung einzuholen — das **agy-Gegenstück zum offiziellen `codex`-Plugin**.
 
-Plattformübergreifend: **Windows, Linux, macOS** (reiner Node-Companion, keine Shell-Wrapper).
+> **Inoffizielles Community-Plugin.** Nicht mit Google oder Anthropic verbunden. Es
+> benötigt die lokal installierte `agy`-CLI und parst deren Transcript-Format auf der
+> Festplatte (keine stabile öffentliche API) — was tatsächlich getestet wurde, siehe
+> [TEST_MATRIX.md](TEST_MATRIX.md).
+
+Plattformübergreifend: **Windows, Linux, macOS** (reiner Node-Companion). Bisher
+hauptsächlich unter Windows getestet; die Pfaderkennung deckt übliche Windows/macOS/
+Linux-Layouts ab, und du kannst `AGY_BIN` setzen, falls `agy` woanders liegt.
 
 ## Befehle
 
