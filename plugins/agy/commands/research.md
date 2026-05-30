@@ -21,5 +21,6 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" research < "$TMPDIR/agy_p
 3. Present agy's synthesized answer, attributed to agy / Gemini. Treat it as a
    second opinion and apply your own judgment.
 
-Permissions: `research` runs READ-ONLY by default. `--write` is accepted if the
-user wants agy to also save notes/files, but default to read-only.
+Permissions: `research` runs READ-ONLY by default. If the user passed `--write`,
+add it BEFORE the `<` redirect so the override reaches the companion, e.g.
+`node "...agy-companion.mjs" research --write < "$TMPDIR/agy_prompt.txt"`.

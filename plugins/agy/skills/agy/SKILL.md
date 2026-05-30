@@ -11,11 +11,25 @@ equivalent of the `/codex` family. Backend model: Gemini 3.5 Flash (High).
 
 ## How to invoke (always via the companion)
 
-Use the cross-platform Node companion — never call `agy --print` by hand:
+Use the cross-platform Node companion — never call `agy --print` by hand.
+
+**Pass the user's prompt via STDIN, never on the shell command line** (injection-safe).
+Write the prompt to a temp file with the `Write` tool, then pipe it in:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" <subcommand> "<text>"
+# subcommand ∈ ask | task | research | review | adversarial-review
+node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" <subcommand> < "$TMPDIR/agy_prompt.txt"
 ```
+(Windows: `node "%CLAUDE_PLUGIN_ROOT%\scripts\agy-companion.mjs" <subcommand> < "%TEMP%\agy_prompt.txt"`.)
+
+For `setup` / `status` no stdin is needed. For `result` / `cancel`, pass a job id that
+matches `^\d{8}_\d{6}_\d{4}$` (validate before use) — never arbitrary text:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" result <validated-id-or-empty>
+```
+
+Permission override (optional, mirrors codex): append `--write` or `--read-only`
+to the node command before the `<` redirect to override the subcommand's default.
 
 Subcommands: `ask`, `task` (write-capable), `research`, `review`,
 `adversarial-review`, `setup`, `status`, `result`, `cancel`.

@@ -26,5 +26,6 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review < "$TM
      then say: "agy adversarial review started. Check `/agy:status`."
 4. Return agy's review verbatim. Do not fix the issues here.
 
-Permissions: read-only by default. `--write` is accepted but rarely appropriate
-for a review — keep read-only unless the user explicitly asks otherwise.
+Permissions: read-only by default. If the user explicitly passed `--write`,
+forward it by adding `--write` before the `<` redirect in the node command.
+Otherwise keep read-only.

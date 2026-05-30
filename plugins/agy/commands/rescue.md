@@ -29,5 +29,6 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" rescue < "$TMPDIR/agy_pro
    (`git diff`), since agy edits autonomously.
 
 Permissions: `rescue` is WRITE-capable by default (agy may edit files). If the user
-passes `--read-only`, append it to the node command to forbid edits (advice only).
-Forward `--write` / `--read-only` to the companion verbatim.
+passed `--read-only`, add it before the `<` redirect, e.g.
+`node "...agy-companion.mjs" rescue --read-only < "$TMPDIR/agy_prompt.txt"`,
+to forbid edits (advice only).

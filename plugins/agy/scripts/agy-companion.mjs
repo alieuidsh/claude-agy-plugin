@@ -156,14 +156,14 @@ function runAgy(prompt, { workdir = process.cwd(), timeoutMs = DEFAULT_TIMEOUT_M
 
 function killTree(pid) {
   if (!pid) return;
+  // Kill ONLY this PID's process tree. On Windows `taskkill /T` already kills the
+  // whole descendant tree, so agy's helper (webm_encoder.exe) spawned by THIS agy
+  // goes with it. We deliberately do NOT kill webm_encoder by image name, which
+  // would also kill helpers of other concurrent jobs.
   try {
     if (IS_WIN) execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" });
     else process.kill(-pid, "SIGKILL");
   } catch { /* already gone */ }
-  // agy spawns a helper that can linger (Windows only).
-  if (IS_WIN) {
-    try { execSync(`taskkill /F /IM webm_encoder.exe /T`, { stdio: "ignore" }); } catch { /* none */ }
-  }
 }
 
 // ---------- read agy's answer from this run's transcript ----------
@@ -190,19 +190,25 @@ function extractAnswer(sinceMs, nonce) {
   }
 
   if (nonce) {
-    // Find the transcript file whose user input carries our nonce.
+    // Find the transcript file whose user input carries our nonce, then take ONLY
+    // the MODEL responses belonging to THIS run: the rows from our matching
+    // USER_INPUT up to (but not including) the next USER_INPUT. This prevents
+    // bleed-in if agy appends multiple runs to one transcript file.
     for (const f of files) {
       let rows;
       try { rows = parseJsonl(f); } catch { continue; }
-      const mine = rows.some(
+      // sort by step_index so "next USER_INPUT" is well-defined even if file order varies
+      rows = rows.slice().sort((a, b) => Number(a.step_index ?? 0) - Number(b.step_index ?? 0));
+      const startIdx = rows.findIndex(
         (o) => o.type === "USER_INPUT" && typeof o.content === "string" && o.content.includes(nonce),
       );
-      if (!mine) continue;
-      // Order by step_index (monotonic, written sequentially) — more reliable than
-      // created_at string compare, which ties on coarse (~15ms) Windows clocks.
-      const segs = rows
+      if (startIdx === -1) continue;
+      let endIdx = rows.length;
+      for (let i = startIdx + 1; i < rows.length; i++) {
+        if (rows[i].type === "USER_INPUT") { endIdx = i; break; }
+      }
+      const segs = rows.slice(startIdx, endIdx)
         .filter((o) => o.type === "PLANNER_RESPONSE" && o.source === "MODEL" && o.content)
-        .sort((a, b) => Number(a.step_index ?? 0) - Number(b.step_index ?? 0))
         .map((o) => o.content.trim())
         .filter(Boolean);
       if (segs.length) return segs.join("\n\n");
@@ -311,7 +317,13 @@ async function runJob(kind, prompt, { workdir, timeoutMs, readOnly = false } = {
   const r = await runAgy(prompt, {
     workdir, timeoutMs, readOnly, nonce,
     onSpawn: (pid) => {
-      try { const mm = readMeta(id); mm.pid = pid; writeMeta(id, mm); } catch { /* meta race; non-fatal */ }
+      try {
+        const mm = readMeta(id);
+        mm.pid = pid;
+        writeMeta(id, mm);
+        // If a cancel arrived before the PID was recorded, honor it now.
+        if (mm.cancelRequested) killTree(pid);
+      } catch { /* meta race; non-fatal */ }
     },
   });
 
@@ -373,7 +385,14 @@ function cmdCancel(rawId) {
     let m; try { m = JSON.parse(readFileSync(join(JOBS, f), "utf8")); } catch { continue; }
     if (id && m.id !== id) continue;
     if (m.status !== "running") continue;
-    if (m.pid) killTree(m.pid);   // targeted: only THIS job's process tree
+    if (m.pid) {
+      killTree(m.pid);            // targeted: only THIS job's process tree
+    } else {
+      // PID not recorded yet (job spawned but onSpawn hasn't fired). Leave a
+      // cancel request; onSpawn checks this flag and kills itself immediately.
+      m.cancelRequested = true;
+      writeFileSync(join(JOBS, f), JSON.stringify(m, null, 2), "utf8");
+    }
     m.status = "cancelled"; m.end = new Date().toISOString();
     writeFileSync(join(JOBS, f), JSON.stringify(m, null, 2), "utf8");
     n++;

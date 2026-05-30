@@ -29,5 +29,6 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" ask < "$TMPDIR/agy_prompt
    to diagnose. Do NOT loop-retry.
 
 Permissions: `ask` runs READ-ONLY by default (agy cannot edit your files). If the
-user passes `--write`, append it to the node command to allow agy to edit files in
-the current project. (Default safe; user can opt in — same model as codex.)
+user passed `--write`, add it before the `<` redirect, e.g.
+`node "...agy-companion.mjs" ask --write < "$TMPDIR/agy_prompt.txt"`.
+(Default safe; user can opt in — same model as codex.)

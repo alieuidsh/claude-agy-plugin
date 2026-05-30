@@ -27,5 +27,6 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" review < "$TMPDIR/agy_pro
      `AskUserQuestion` once (Wait vs Background).
 4. Return agy's review verbatim. Do not fix the issues it raises in this command.
 
-Permissions: `review` runs READ-ONLY by default. A user may pass `--write` to let
-agy edit while reviewing, but that is unusual — keep it read-only unless asked.
+Permissions: `review` runs READ-ONLY by default. If the user explicitly passed
+`--write`, forward it by adding `--write` before the `<` redirect in the node
+command. Otherwise keep it read-only.
