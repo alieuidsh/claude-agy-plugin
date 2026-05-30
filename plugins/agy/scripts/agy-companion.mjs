@@ -178,32 +178,35 @@ function killTree(pid) {
 }
 
 // Format-agnostic fallback (SELF-HEAL layer 1): if agy renames its fields/types,
-// the precise parser below returns nothing. Rather than fail, try to recover the
-// answer from rows that still "look like" model output, reading ANY string field —
-// so most schema tweaks are handled automatically, with no plugin update.
+// the precise parser returns nothing. Recover the answer from model-ish rows using
+// an ALLOWLIST of answer-bearing keys, taking the SINGLE best field PER ROW. This
+// (a) never leaks chain-of-thought (thinking/reasoning/plan are not in the allowlist),
+// (b) never concatenates arbitrary fields into a garbled blob, and (c) accepts short
+// answers like "7". Reviewed 4th round by codex + agy (both flagged the prior denylist).
+const CONTENT_KEYS = ["content", "text", "message", "answer", "response", "output_text", "output", "reply"];
 function heuristicAnswer(runRows, nonce) {
   const looksModel = (o) => {
-    const t = (String(o.type || "") + " " + String(o.source || "")).toLowerCase();
-    return /response|model|assistant|answer|reply/.test(t) && !/user|request|tool|system/.test(t);
+    const t = (String(o.type || "") + " " + String(o.source || "") + " " + String(o.role || "")).toLowerCase();
+    const modelish = /model|assistant|response|answer|reply|\bai\b|gemini|\bbot\b|message|\bmsg\b/.test(t);
+    const otherish = /user|request|tool|system|plan|thought|think|reason|scratch/.test(t);
+    return modelish && !otherish;
   };
-  const cand = runRows.filter(looksModel);
-  if (!cand.length) return null;
-  // Skip structural/metadata fields; keep prose-like values (has whitespace, or
-  // long) so we don't mistake a type name like "PLANNER_STEP" for answer text.
-  const STRUCT = new Set(["type", "source", "role", "id", "step_index", "created_at", "status", "name", "tool", "kind"]);
-  const strings = [];
-  for (const o of cand) {
-    for (const [k, v] of Object.entries(o)) {
-      if (STRUCT.has(k)) continue;
+  const segs = [];
+  for (const o of runRows) {
+    if (!looksModel(o)) continue;
+    // One field per row: first present allowlisted key with a non-empty string.
+    for (const k of CONTENT_KEYS) {
+      const v = o[k];
       if (typeof v !== "string") continue;
       const s = v.trim();
-      if (s.includes(nonce)) continue;
-      if (s.length >= 40 || (s.length >= 12 && /\s/.test(s))) strings.push(s);
+      if (!s || s.includes(nonce)) continue;
+      segs.push(s);
+      break;
     }
   }
-  if (!strings.length) return null;
+  if (!segs.length) return null;
   const seen = new Set(); const uniq = [];
-  for (const s of strings) if (!seen.has(s)) { seen.add(s); uniq.push(s); }
+  for (const s of segs) if (!seen.has(s)) { seen.add(s); uniq.push(s); }
   return uniq.join("\n\n");
 }
 
@@ -383,37 +386,40 @@ async function runJob(kind, prompt, { workdir, timeoutMs, readOnly = false } = {
     },
   });
 
-  let out, ok = r.ok;
+  let out, status, exitCode;
   if (r.ok) {
-    out = r.answer;
+    out = r.answer; status = "done"; exitCode = 0;
   } else if (r.formatDrift && r.transcriptPath) {
-    // Self-heal layer 2: emit a structured hand-off the calling assistant can act on.
-    out = driftHandoffBlock(r.transcriptPath, nonce);
-    ok = true; // recoverable hand-off, not a hard failure
+    // Self-heal layer 2: emit a hand-off the calling assistant acts on. Status is the
+    // HONEST "needs_extraction" (not "done") so /agy:status / callers don't misread
+    // drift as success; exit stays 0 so the assistant still receives the handoff block.
+    out = driftHandoffBlock(r.transcriptPath, nonce); status = "needs_extraction"; exitCode = 0;
   } else {
-    out = `ERROR: ${r.error}`;
+    out = `ERROR: ${r.error}`; status = "failed"; exitCode = 1;
   }
   writeFileSync(jobOutPath(id), out, "utf8");
   const m = readMeta(id);
-  m.status = ok ? "done" : "failed";
+  m.status = status;
   m.end = new Date().toISOString();
   writeMeta(id, m);
 
   // Print the answer to stdout (clean UTF-8). Use a callback to ensure the write
   // flushes before we exit (process.exit can truncate a pending pipe write).
   await new Promise((res) => process.stdout.write(out + "\n", () => res()));
-  return ok ? 0 : 1;
+  return exitCode;
 }
 
 // Self-heal layer 2: when the plugin can't parse agy's (changed) transcript, emit
 // this block. The calling assistant (Claude) reads the raw transcript and extracts
 // the answer itself — recovering on the spot, with NO plugin update required.
 function driftHandoffBlock(transcriptPath, nonce) {
+  // Strip control chars so a weird directory name can't corrupt the block layout.
+  const safePath = String(transcriptPath).replace(/[\r\n\x00-\x1f]/g, "");
   return [
     "AGY_NEEDS_CLAUDE_EXTRACTION",
     "agy ran successfully, but this plugin could not parse its answer — agy's",
     "transcript format appears to have changed. Recover it yourself, no update needed:",
-    `  1. Read this file: ${transcriptPath}`,
+    `  1. Read this file: ${safePath}`,
     `  2. Find the entry whose text contains the marker: [run:${nonce}]`,
     "  3. After that entry (up to the next user-input entry), gather the model's",
     "     actual reply text — the substantive answer, not tool-call/planning chatter.",
