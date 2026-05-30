@@ -1,7 +1,20 @@
 # Test Matrix
 
 Honest record of what has actually been verified, so users know the real maturity.
-**Status: works well on Windows; Linux/macOS are designed-for but not yet hardware-verified.**
+**Status: end-to-end verified on Windows; the parser core is CI-verified on Linux +
+macOS + Windows (Node 18/20/22); end-to-end agy interaction on Linux/macOS is still
+pending real hardware.**
+
+## Continuous integration
+
+GitHub Actions (`.github/workflows/test.yml`) runs `node --check` + `npm test` on a
+**ubuntu-latest × macos-latest × windows-latest** matrix with **Node 18 / 20 / 22**
+on every push and PR. This verifies the transcript parser — the plugin's core logic —
+on real Linux and macOS runners.
+
+What CI does **not** cover: it cannot call the real `agy` CLI (not installed / no
+Google sign-in on runners), so end-to-end agy interaction on Linux/macOS still needs
+a real machine (see the pending rows below).
 
 ## Automated tests (parser core)
 
