@@ -1,4 +1,4 @@
-# agy-antigravity — Google Antigravity (Gemini) for Claude Code
+# claude-agy-plugin — Google Antigravity (Gemini) for Claude Code
 
 A Claude Code plugin that lets Claude call the local **`agy`** CLI (Google
 Antigravity, Gemini-backed) to review code, delegate tasks, and give second
@@ -39,8 +39,8 @@ Verify everything with `/agy:setup` after install.
 ## Install (other machines)
 
 ```
-/plugin marketplace add <your-github-user>/agy-antigravity
-/plugin install agy@agy-antigravity
+/plugin marketplace add <your-github-user>/claude-agy-plugin
+/plugin install agy@suho-agy
 ```
 
 Then restart Claude Code and run `/agy:setup`.
