@@ -1,0 +1,5 @@
+# Force LF for all text so the plugin works on Linux/macOS as well as Windows.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
