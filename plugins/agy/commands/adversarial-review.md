@@ -1,33 +1,27 @@
 ---
 description: Run an adversarial Google Antigravity (Gemini) review that tries to break the local diff
 argument-hint: "[--wait|--background] [focus]"
-allowed-tools: Bash(node:*), Bash(git:*), AskUserQuestion
+allowed-tools: Bash(node:*), Bash(git:*), Write, AskUserQuestion
 ---
 
 Run an ADVERSARIAL agy (Antigravity / Gemini) review of the local git diff — agy
-plays a ruthless reviewer hunting for bugs, security holes, edge cases, and bad
-design tradeoffs. Review-only — do not fix anything here.
+plays a ruthless reviewer hunting for bugs, security holes, and edge cases.
+Review-only — agy runs WITHOUT write permissions for this command.
 
-Raw arguments: $ARGUMENTS
+Raw arguments (may include --wait / --background and focus text):
+$ARGUMENTS
 
-Execution mode:
-- If `--wait`, foreground. If `--background`, Claude background task.
-- Otherwise estimate diff size and recommend background for non-tiny diffs via
-  `AskUserQuestion` (one question).
-
-Foreground:
+Steps:
+1. Strip `--wait` / `--background`; the rest is optional focus text.
+2. **Injection-safe input**: if there is focus text, use the `Write` tool to save
+   it to `${TMPDIR:-/tmp}/agy_prompt.txt` (Windows: `%TEMP%\agy_prompt.txt`) and
+   pipe via stdin; otherwise pipe empty stdin. Never put focus text in the shell
+   command string. The companion gathers the git diff itself.
+3. Execution mode:
+   - `--wait` / small diff → foreground:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review "$ARGUMENTS"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review < "$TMPDIR/agy_prompt.txt"
 ```
-
-Background:
-```typescript
-Bash({
-  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review "$ARGUMENTS"`,
-  description: "agy adversarial review",
-  run_in_background: true
-})
-```
-After background launch: "agy adversarial review started. Check `/agy:status`."
-
-Return agy's review verbatim. Do not fix the issues here.
+   - `--background` / large diff → same command with `Bash(..., run_in_background: true)`,
+     then say: "agy adversarial review started. Check `/agy:status`."
+4. Return agy's review verbatim. Do not fix the issues here.

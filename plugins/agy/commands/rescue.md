@@ -1,35 +1,29 @@
 ---
 description: Delegate a task, investigation, or fix to Google Antigravity (Gemini); agy may edit files
 argument-hint: "[--background|--wait] [what agy should do, investigate, or fix]"
-allowed-tools: Bash(node:*), AskUserQuestion
+allowed-tools: Bash(node:*), Write, AskUserQuestion
 ---
 
-Delegate work to agy (Antigravity / Gemini). Unlike review, this is WRITE-capable:
-agy may edit files in the current project to accomplish the task.
+Delegate work to agy (Antigravity / Gemini). This is WRITE-capable: agy may edit
+files in the current project to accomplish the task.
 
-Raw request:
+Raw request (may include --wait / --background):
 $ARGUMENTS
 
-Execution mode:
-- If `$ARGUMENTS` includes `--wait`, run in the foreground.
-- If it includes `--background`, run as a Claude background task.
-- Otherwise default to foreground for small asks; for anything that sounds like a
-  multi-file change, use `AskUserQuestion` once to offer "Wait" vs "Run in background".
-
-Foreground:
+Steps:
+1. Strip any `--wait` / `--background` flag from the request; the remaining text
+   is the task. If empty, ask the user what agy should do.
+2. **Injection-safe input**: use the `Write` tool to save the task text to
+   `${TMPDIR:-/tmp}/agy_prompt.txt` (Windows: `%TEMP%\agy_prompt.txt`). Never put
+   the task text inside the shell command string.
+3. Execution mode:
+   - `--wait` (or small task) → foreground:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" task "$ARGUMENTS"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" rescue < "$TMPDIR/agy_prompt.txt"
 ```
-
-Background:
-```typescript
-Bash({
-  command: `node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" task "$ARGUMENTS"`,
-  description: "agy task",
-  run_in_background: true
-})
-```
-After launching in background, tell the user: "agy task started. Check `/agy:status`."
-
-Return agy's output. Treat it as a capable collaborator's work — review its
-changes before relying on them.
+   - `--background` (or large multi-file task) → run that same command with
+     `Bash(..., run_in_background: true)`, then tell the user: "agy task started.
+     Check `/agy:status`." If neither flag is given and the task looks large, use
+     `AskUserQuestion` once to offer Wait vs Background.
+4. Return agy's output. Review its file changes before relying on them
+   (`git diff`), since agy edits autonomously.
