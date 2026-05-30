@@ -1,6 +1,6 @@
 ---
 description: Ask Google Antigravity (Gemini) a one-shot question and return its answer
-argument-hint: "[your question for Gemini]"
+argument-hint: "[--write] [your question for Gemini]"
 allowed-tools: Bash(node:*), Write
 ---
 
@@ -27,3 +27,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" ask < "$TMPDIR/agy_prompt
    "— agy / Gemini" but do not rewrite agy's content.
 4. If the command exits non-zero (timeout/auth), tell the user to run `/agy:setup`
    to diagnose. Do NOT loop-retry.
+
+Permissions: `ask` runs READ-ONLY by default (agy cannot edit your files). If the
+user passes `--write`, append it to the node command to allow agy to edit files in
+the current project. (Default safe; user can opt in — same model as codex.)

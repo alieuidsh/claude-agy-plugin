@@ -393,12 +393,17 @@ async function cmdSetup() {
 }
 
 // ---------- arg parsing (flags only; prompt comes from stdin) ----------
+// `writeOverride`: null = use the subcommand's safe default; true = --write forces
+// write-capable; false = --read-only forces read-only. Mirrors codex's model of a
+// safe default that the user can explicitly override.
 function parseFlags(rest) {
-  const out = { background: false, wait: false, timeoutMs: DEFAULT_TIMEOUT_MS };
+  const out = { background: false, wait: false, timeoutMs: DEFAULT_TIMEOUT_MS, writeOverride: null };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === "--background") out.background = true;
     else if (a === "--wait") out.wait = true;
+    else if (a === "--write") out.writeOverride = true;
+    else if (a === "--read-only" || a === "--readonly") out.writeOverride = false;
     else if (a === "--timeout" && rest[i + 1]) {
       const secs = parseInt(rest[++i], 10);
       if (Number.isFinite(secs) && secs > 0) {
@@ -410,6 +415,13 @@ function parseFlags(rest) {
   return out;
 }
 
+// Resolve effective read-only state: explicit user flag wins over the default.
+function resolveReadOnly(defaultReadOnly, writeOverride) {
+  if (writeOverride === true) return false;  // --write
+  if (writeOverride === false) return true;  // --read-only
+  return defaultReadOnly;                     // subcommand default
+}
+
 // ---------- main ----------
 const [, , sub, ...rest] = process.argv;
 const cwd = process.cwd();
@@ -418,25 +430,33 @@ const cwd = process.cwd();
   const f = parseFlags(rest);
   const stdinText = ["ask", "task", "rescue", "research", "review", "adversarial-review"].includes(sub) ? readStdin() : "";
 
+  // Per-command default read-only state; user --write / --read-only overrides it.
+  // workdir is the write target: only granted when the run is write-capable.
+  const run = async (kind, prompt, defaultReadOnly) => {
+    const readOnly = resolveReadOnly(defaultReadOnly, f.writeOverride);
+    const workdir = readOnly ? "" : cwd;
+    return runJob(kind, prompt, { workdir, timeoutMs: f.timeoutMs, readOnly });
+  };
+
   switch (sub) {
     case "ask":
-      code = await runJob("ask", stdinText, { workdir: "", timeoutMs: f.timeoutMs, readOnly: true });
+      code = await run("ask", stdinText, /*defaultReadOnly*/ true);
       break;
     case "task":
     case "rescue":
-      code = await runJob("task", `Do this task in the current project. You MAY edit files.\n\n${stdinText}`, { workdir: cwd, timeoutMs: f.timeoutMs });
+      code = await run("task", `Do this task in the current project. You MAY edit files.\n\n${stdinText}`, /*defaultReadOnly*/ false);
       break;
     case "research":
-      code = await runJob("research", `Research the following and give a synthesized, well-structured answer with concrete details:\n\n${stdinText}`, { workdir: "", timeoutMs: f.timeoutMs, readOnly: true });
+      code = await run("research", `Research the following and give a synthesized, well-structured answer with concrete details:\n\n${stdinText}`, /*defaultReadOnly*/ true);
       break;
     case "review": {
       const { diff } = collectDiff();
-      code = await runJob("review", reviewPrompt(stdinText, diff, false), { workdir: "", timeoutMs: f.timeoutMs, readOnly: true });
+      code = await run("review", reviewPrompt(stdinText, diff, false), /*defaultReadOnly*/ true);
       break;
     }
     case "adversarial-review": {
       const { diff } = collectDiff();
-      code = await runJob("adversarial-review", reviewPrompt(stdinText, diff, true), { workdir: "", timeoutMs: f.timeoutMs, readOnly: true });
+      code = await run("adversarial-review", reviewPrompt(stdinText, diff, true), /*defaultReadOnly*/ true);
       break;
     }
     case "setup": code = await cmdSetup(); break;

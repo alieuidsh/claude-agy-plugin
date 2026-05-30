@@ -25,3 +25,6 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review < "$TM
    - `--background` / large diff → same command with `Bash(..., run_in_background: true)`,
      then say: "agy adversarial review started. Check `/agy:status`."
 4. Return agy's review verbatim. Do not fix the issues here.
+
+Permissions: read-only by default. `--write` is accepted but rarely appropriate
+for a review — keep read-only unless the user explicitly asks otherwise.

@@ -1,6 +1,6 @@
 ---
 description: Delegate a task, investigation, or fix to Google Antigravity (Gemini); agy may edit files
-argument-hint: "[--background|--wait] [what agy should do, investigate, or fix]"
+argument-hint: "[--background|--wait] [--read-only] [what agy should do, investigate, or fix]"
 allowed-tools: Bash(node:*), Write, AskUserQuestion
 ---
 
@@ -27,3 +27,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" rescue < "$TMPDIR/agy_pro
      `AskUserQuestion` once to offer Wait vs Background.
 4. Return agy's output. Review its file changes before relying on them
    (`git diff`), since agy edits autonomously.
+
+Permissions: `rescue` is WRITE-capable by default (agy may edit files). If the user
+passes `--read-only`, append it to the node command to forbid edits (advice only).
+Forward `--write` / `--read-only` to the companion verbatim.
