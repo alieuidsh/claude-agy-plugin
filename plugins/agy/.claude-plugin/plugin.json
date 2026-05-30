@@ -1,6 +1,6 @@
 {
   "name": "agy",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Use Google Antigravity (Gemini) from Claude Code to review code or delegate tasks.",
   "author": {
     "name": "Suho (NIU MIT Lab)"

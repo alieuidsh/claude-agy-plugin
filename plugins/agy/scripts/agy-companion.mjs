@@ -287,7 +287,7 @@ function extractAnswer(sinceMs, nonce) {
     let rows;
     try { rows = parseJsonl(f); } catch { continue; }
     for (const o of rows) {
-      if (o.type === "PLANNER_RESPONSE" && o.source === "MODEL" && o.content) {
+      if (o && typeof o === "object" && o.type === "PLANNER_RESPONSE" && o.source === "MODEL" && o.content) {
         const ts = String(o.created_at || "");
         if (ts >= bestTs) { best = o.content; bestTs = ts; }
       }
@@ -347,6 +347,20 @@ function parseJsonl(file) {
 }
 
 // ---------- job metadata ----------
+// Best-effort sweep of orphaned big-prompt temp files (prompt_*.txt) left behind if
+// a process was killed before done() could unlink one. Old (>1h) ones only, so we
+// never touch a file a concurrent run is actively using. (Reviewed: P3 leftover temp.)
+function sweepOrphanPromptFiles() {
+  try {
+    const now = Date.now();
+    for (const f of readdirSync(JOBS)) {
+      if (!/^prompt_.*\.txt$/.test(f)) continue;
+      const full = join(JOBS, f);
+      try { if (now - statSync(full).mtimeMs > 3_600_000) unlinkSync(full); } catch { /* skip */ }
+    }
+  } catch { /* JOBS may not exist yet */ }
+}
+
 function ensureJobs() {
   try {
     if (existsSync(JOBS)) {
@@ -387,6 +401,12 @@ function git(argv) {
 }
 function collectDiff() {
   const status = git(["status", "--short", "--untracked-files=all"]);
+  // intent-to-add (-N) registers untracked files so their content shows up in
+  // `git diff` as new-file hunks — otherwise a brand-new, not-yet-added file (often
+  // exactly what you want reviewed) is invisible to agy, which would only see the
+  // `?? foo.js` line in status. -N records no content in the index, so it does not
+  // actually stage anything for commit. (Reviewed: P1, untracked-file blind spot.)
+  git(["add", "-N", "--", "."]);
   const staged = git(["diff", "--cached"]);
   const unstaged = git(["diff"]);
   return { status, diff: (staged + "\n" + unstaged).trim() };
@@ -416,6 +436,7 @@ function readStdin() {
 // ---------- run + record a job ----------
 async function runJob(kind, prompt, { workdir, timeoutMs, readOnly = false } = {}) {
   ensureJobs();
+  sweepOrphanPromptFiles(); // clear any temp files orphaned by a previously-killed run
   const id = newJobId();
   const nonce = `agy-${id}-${Math.floor(Math.random() * 1e9).toString(36)}`;
   const promptPreview = prompt.replace(/\s+/g, " ").slice(0, 200);
@@ -431,6 +452,11 @@ async function runJob(kind, prompt, { workdir, timeoutMs, readOnly = false } = {
         mm.pid = pid;
         writeMeta(id, mm);
         // If a cancel arrived before the PID was recorded, honor it now.
+        // KNOWN ISSUE (P3, accepted): cancel + onSpawn are two processes with no
+        // lock. A tiny interleaving window exists where cancel reads meta (pid still
+        // null, sets cancelRequested) AFTER this read but BEFORE this write — the
+        // kill could be missed (status=cancelled but agy keeps running until its
+        // own timeout). Window is sub-millisecond and self-limits via timeoutMs.
         if (mm.cancelRequested) killTree(pid);
       } catch { /* meta race; non-fatal */ }
     },
@@ -481,8 +507,11 @@ function driftHandoffBlock(transcriptPath, nonce) {
 // ---------- subcommands: status / result / cancel / setup ----------
 function cmdStatus() {
   ensureJobs();
+  // statSync can throw if a concurrent job deletes a meta file mid-listing — map to
+  // 0 and filter, rather than letting the whole listing crash. (Reviewed: P3.)
   const metas = readdirSync(JOBS).filter((f) => f.endsWith(".meta.json"))
-    .map((f) => ({ f, t: statSync(join(JOBS, f)).mtimeMs }))
+    .map((f) => { try { return { f, t: statSync(join(JOBS, f)).mtimeMs }; } catch { return null; } })
+    .filter(Boolean)
     .sort((a, b) => b.t - a.t).slice(0, 15);
   if (!metas.length) { console.log("(no agy jobs yet)"); return 0; }
   console.log("JOB ID                 KIND        STATUS     PROMPT");
@@ -499,7 +528,8 @@ function cmdResult(rawId) {
   if (rawId && !id) { console.error(`Invalid job id: ${rawId}`); return 1; }
   if (!id) {
     const metas = readdirSync(JOBS).filter((f) => f.endsWith(".meta.json"))
-      .map((f) => ({ id: f.replace(/\.meta\.json$/, ""), t: statSync(join(JOBS, f)).mtimeMs }))
+      .map((f) => { try { return { id: f.replace(/\.meta\.json$/, ""), t: statSync(join(JOBS, f)).mtimeMs }; } catch { return null; } })
+      .filter(Boolean)
       .sort((a, b) => b.t - a.t);
     if (!metas.length) { console.log("(no agy jobs yet)"); return 0; }
     id = metas[0].id;

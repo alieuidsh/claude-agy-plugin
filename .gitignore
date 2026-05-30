@@ -12,3 +12,7 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+
+# Dev scratch (never commit)
+_*.txt
+*.scratch
