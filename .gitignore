@@ -1,0 +1,14 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local agy job state (per-machine, never commit)
+.agy-jobs/
+
+# Editor
+.vscode/
+.idea/
