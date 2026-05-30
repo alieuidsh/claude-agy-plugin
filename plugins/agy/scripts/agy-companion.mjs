@@ -238,38 +238,11 @@ function extractAnswer(sinceMs, nonce) {
   }
 
   if (nonce) {
-    // Find the transcript file whose user input carries our nonce, then take ONLY
-    // the MODEL responses belonging to THIS run: the rows from our matching
-    // USER_INPUT up to (but not including) the next USER_INPUT. This prevents
-    // bleed-in if agy appends multiple runs to one transcript file.
-    let foundMyTranscript = false;
     for (const f of files) {
       let rows;
       try { rows = parseJsonl(f); } catch { continue; }
-      // sort by step_index so "next USER_INPUT" is well-defined even if file order varies
-      rows = rows.slice().sort((a, b) => Number(a.step_index ?? 0) - Number(b.step_index ?? 0));
-      const startIdx = rows.findIndex(
-        (o) => o.type === "USER_INPUT" && typeof o.content === "string" && o.content.includes(nonce),
-      );
-      if (startIdx === -1) continue;
-      foundMyTranscript = true; // our prompt reached agy and was logged
-      let endIdx = rows.length;
-      for (let i = startIdx + 1; i < rows.length; i++) {
-        if (rows[i].type === "USER_INPUT") { endIdx = i; break; }
-      }
-      const runRows = rows.slice(startIdx + 1, endIdx); // exclude our prompt row
-      // Precise parser (known format):
-      const segs = runRows
-        .filter((o) => o.type === "PLANNER_RESPONSE" && o.source === "MODEL" && o.content)
-        .map((o) => String(o.content).trim())
-        .filter(Boolean);
-      if (segs.length) return { answer: segs.join("\n\n"), formatDrift: false, transcriptPath: f };
-      // Self-heal layer 1: heuristic (survives field/type renames).
-      const heur = heuristicAnswer(runRows, nonce);
-      if (heur) return { answer: heur, formatDrift: false, transcriptPath: f };
-      // Found our transcript but couldn't extract → real drift; hand path to caller
-      // so Claude can read it directly (self-heal layer 2).
-      return { answer: null, formatDrift: true, transcriptPath: f };
+      const r = extractFromRows(rows, nonce);
+      if (r.matched) return { answer: r.answer, formatDrift: r.formatDrift, transcriptPath: f };
     }
     // Nonce never found in any recent transcript → agy probably didn't run (timeout/auth).
     return { answer: null, formatDrift: false, transcriptPath: null };
@@ -288,6 +261,34 @@ function extractAnswer(sinceMs, nonce) {
     }
   }
   return { answer: best, formatDrift: false, transcriptPath: null };
+}
+
+// PURE, unit-testable core: given parsed transcript rows + our nonce, extract THIS
+// run's answer. Returns { matched, answer, formatDrift }. Takes ONLY the rows from
+// our matching USER_INPUT up to (not incl.) the next USER_INPUT, so multiple runs
+// appended to one transcript file don't bleed together.
+function extractFromRows(rows, nonce) {
+  const sorted = rows.slice().sort((a, b) => Number(a.step_index ?? 0) - Number(b.step_index ?? 0));
+  const startIdx = sorted.findIndex(
+    (o) => o.type === "USER_INPUT" && typeof o.content === "string" && o.content.includes(nonce),
+  );
+  if (startIdx === -1) return { matched: false, answer: null, formatDrift: false };
+  let endIdx = sorted.length;
+  for (let i = startIdx + 1; i < sorted.length; i++) {
+    if (sorted[i].type === "USER_INPUT") { endIdx = i; break; }
+  }
+  const runRows = sorted.slice(startIdx + 1, endIdx); // exclude our prompt row
+  // Precise parser (known format):
+  const segs = runRows
+    .filter((o) => o.type === "PLANNER_RESPONSE" && o.source === "MODEL" && o.content)
+    .map((o) => String(o.content).trim())
+    .filter(Boolean);
+  if (segs.length) return { matched: true, answer: segs.join("\n\n"), formatDrift: false };
+  // Self-heal layer 1: heuristic (survives field/type renames).
+  const heur = heuristicAnswer(runRows, nonce);
+  if (heur) return { matched: true, answer: heur, formatDrift: false };
+  // Matched our transcript but couldn't extract → real drift (Claude layer 2).
+  return { matched: true, answer: null, formatDrift: true };
 }
 
 function parseJsonl(file) {
@@ -667,4 +668,5 @@ async function main() {
       code = 2;
   }
   process.exitCode = code; // let stdout flush naturally instead of hard process.exit
-})();
+}
+if (isMain) main();
