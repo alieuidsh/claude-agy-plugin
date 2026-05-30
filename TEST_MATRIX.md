@@ -12,14 +12,32 @@ transcript parser, which is the heart of the plugin:
 |---|---|
 | Single-segment answer | ✅ |
 | Long answer chunked across multiple rows (joined in step order) | ✅ |
+| Out-of-order rows sorted by step_index (sort actually exercised) | ✅ |
 | Multiple runs in one transcript (run-scoping, no bleed-in) | ✅ |
+| Run A explicitly does NOT absorb run B's answer | ✅ |
+| Overlapping nonces (`agy-1` substring of `agy-12`) each isolated | ✅ |
 | Schema drift — renamed fields recovered by heuristic | ✅ |
 | Nonce not present → no stale answer | ✅ |
 | Malformed / truncated JSONL lines skipped | ✅ |
+| Non-object JSONL rows (bare `null`/number/`true`) don't crash | ✅ |
 | Unrecoverable drift → format-drift hand-off to Claude | ✅ |
-| No chain-of-thought leak (thinking/plan fields excluded) | ✅ |
+| **Precise** parser drops planning (PLANNER_RESPONSE before a tool call) | ✅ |
+| No chain-of-thought leak — heuristic path (thinking/plan excluded) | ✅ |
 | Short answers kept (no length gate) | ✅ |
 | Planning/tool-only rows → null (fall through to layer-2) | ✅ |
+| Heuristic joins multi-row recovery in step order | ✅ |
+
+**Chain-of-thought handling (honest scope):** agy emits its own reasoning/plan as
+`PLANNER_RESPONSE` rows too, interleaved with tool calls. The precise parser takes
+only the **last contiguous group** of MODEL response rows, so planning steps that
+are separated from the answer by a tool call are dropped (tested). The residual edge
+case is reasoning emitted as a `PLANNER_RESPONSE` *immediately* before the answer
+with **no** intervening tool call — those would still join. That isn't agy's observed
+pattern, but it's a known limit, not a guaranteed-impossible one.
+
+**Big prompts:** prompts over ~8 KB (e.g. a large diff for review) are written to a
+temp file and agy is told to read it, avoiding the OS command-line length limit
+(`spawn ENAMETOOLONG`). The temp file is deleted after the run.
 
 ## Environment matrix (manual)
 

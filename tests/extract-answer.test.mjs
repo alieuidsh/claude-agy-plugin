@@ -100,5 +100,49 @@ console.log("agy parser tests\n");
   ok("planning/tool noise → null", a === null, JSON.stringify(a));
 }
 
+// 11. PRECISE parser must NOT leak planning: a PLANNER_RESPONSE plan row separated
+//     from the answer by a tool call must be dropped (only the final group kept).
+{
+  const r = extractFromRows(rowsOf("cot-precise.jsonl"), "NONCE_COT");
+  ok("precise parser drops planning before a tool call", r.matched && r.answer === "The answer is 4." && !r.answer.includes("INTERNAL"), JSON.stringify(r));
+}
+
+// 12. Non-object JSONL rows (bare null/number/true) must not crash extractFromRows.
+{
+  const r = extractFromRows(rowsOf("non-object-rows.jsonl"), "NONCE_OBJ");
+  ok("non-object rows survived", r.matched && r.answer === "Survived non-object JSONL rows.", JSON.stringify(r));
+}
+
+// 13. step_index sort actually exercised: fixture rows are OUT of file order, so
+//     this fails if the sort is removed.
+{
+  const r = extractFromRows(rowsOf("multi-segment.jsonl"), "NONCE_MULTI");
+  ok("out-of-order rows sorted by step_index", r.answer === "Part one.\n\nPart two.\n\nPart three.", JSON.stringify(r.answer));
+}
+
+// 14. Overlapping nonces (agy-1 is a substring of agy-12) each resolve to their own
+//     answer — no substring bleed.
+{
+  const a = extractFromRows(rowsOf("overlap-nonce.jsonl"), "agy-1");
+  const b = extractFromRows(rowsOf("overlap-nonce.jsonl"), "agy-12");
+  ok("overlap nonce: agy-1 isolated", a.answer === "Answer ONE." && !a.answer.includes("TWELVE"), JSON.stringify(a.answer));
+  ok("overlap nonce: agy-12 isolated", b.answer === "Answer TWELVE.", JSON.stringify(b.answer));
+}
+
+// 15. run-scoping: explicit non-bleed — A's answer must NOT contain B's.
+{
+  const a = extractFromRows(rowsOf("two-runs.jsonl"), "NONCE_A");
+  ok("run A does not absorb run B", a.answer === "Answer for A." && !a.answer.includes("Answer for B."), JSON.stringify(a.answer));
+}
+
+// 16. heuristicAnswer joins multiple answer-bearing rows in step order (it sorts).
+{
+  const a = heuristicAnswer([
+    { step_index: 2, type: "MODEL_TURN", source: "assistant", text: "second" },
+    { step_index: 1, type: "MODEL_TURN", source: "assistant", text: "first" },
+  ], "X");
+  ok("heuristic joins in step order", a === "first\n\nsecond", JSON.stringify(a));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

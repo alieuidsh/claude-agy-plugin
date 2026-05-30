@@ -26,6 +26,7 @@ Steps:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review < "$TMPDIR/agy_prompt_<unique>.txt"
 rm -f "$TMPDIR/agy_prompt_<unique>.txt"
 ```
+   (On Windows cmd: `... adversarial-review < "%TEMP%\agy_prompt_<unique>.txt"` then `del "%TEMP%\agy_prompt_<unique>.txt"`.)
    - `--background` / large diff → same command with `Bash(..., run_in_background: true)`,
      then say: "agy adversarial review started. Check `/agy:status`."
 4. Return agy's review verbatim. Do not fix the issues here.

@@ -29,10 +29,11 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import {
-  existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync,
+  existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync,
 } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { execSync } from "node:child_process";
 
 const HOME = homedir();
@@ -78,7 +79,13 @@ function findAgy() {
 function runAgy(prompt, { workdir = process.cwd(), timeoutMs = DEFAULT_TIMEOUT_MS, readOnly = false, nonce, onSpawn } = {}) {
   return new Promise((resolve) => {
     let settled = false;
-    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    let promptFile = null; // set below if the prompt is too long for the command line
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      if (promptFile) { try { unlinkSync(promptFile); } catch { /* best effort */ } }
+      resolve(v);
+    };
 
     const exe = findAgy();
     if (!exe) {
@@ -88,11 +95,32 @@ function runAgy(prompt, { workdir = process.cwd(), timeoutMs = DEFAULT_TIMEOUT_M
     const startedAt = Date.now();
     const taggedPrompt = nonce ? `[run:${nonce}]\n${prompt}` : prompt;
 
+    // ENAMETOOLONG guard: agy takes the prompt as a command-line argument, and OS
+    // command-line length is capped (~32 KB on Windows). A long prompt (e.g. a big
+    // diff for review) overflows it and spawn throws ENAMETOOLONG. So when the
+    // prompt is large, write it to a file and pass a SHORT instruction that tells
+    // agy (an agent that can read files) to read it. The nonce stays in the short
+    // command-line prompt, so transcript matching still works. Small prompts keep
+    // the proven inline path unchanged.
+    const PROMPT_INLINE_LIMIT = 8000; // chars; well under the OS arg-size ceiling
+    let cmdPrompt = taggedPrompt;
+    if (taggedPrompt.length > PROMPT_INLINE_LIMIT) {
+      try {
+        ensureJobs();
+        promptFile = join(JOBS, `prompt_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e9).toString(36)}.txt`);
+        writeFileSync(promptFile, taggedPrompt, "utf8");
+        cmdPrompt = `${nonce ? `[run:${nonce}]\n` : ""}Your full instructions are in this UTF-8 text file: ${promptFile}\nRead that entire file and do exactly what it says. Treat its contents as the user's prompt.`;
+      } catch {
+        promptFile = null;
+        cmdPrompt = taggedPrompt; // fall back to inline; may still ENAMETOOLONG, but best effort
+      }
+    }
+
     // CRITICAL ARG ORDER: boolean flags first; --print <prompt> LAST.
     const args = [];
     if (!readOnly) args.push("--dangerously-skip-permissions");
     if (workdir) args.push("--add-dir", workdir);
-    args.push("--print", taggedPrompt);
+    args.push("--print", cmdPrompt);
 
     let child;
     try {
@@ -186,13 +214,18 @@ function killTree(pid) {
 const CONTENT_KEYS = ["content", "text", "message", "answer", "response", "output_text", "output", "reply"];
 function heuristicAnswer(runRows, nonce) {
   const looksModel = (o) => {
+    if (!o || typeof o !== "object") return false; // tolerate bare null/number rows
     const t = (String(o.type || "") + " " + String(o.source || "") + " " + String(o.role || "")).toLowerCase();
     const modelish = /model|assistant|response|answer|reply|\bai\b|gemini|\bbot\b|message|\bmsg\b/.test(t);
     const otherish = /user|request|tool|system|plan|thought|think|reason|scratch/.test(t);
     return modelish && !otherish;
   };
+  // Sort by step_index so multi-row recovery joins in chronological order, not
+  // input order (callers may pass rows unsorted). (Reviewed: finding #7.)
+  const ordered = runRows.filter((o) => o && typeof o === "object")
+    .slice().sort((a, b) => Number(a.step_index ?? 0) - Number(b.step_index ?? 0));
   const segs = [];
-  for (const o of runRows) {
+  for (const o of ordered) {
     if (!looksModel(o)) continue;
     // One field per row: first present allowlisted key with a non-empty string.
     for (const k of CONTENT_KEYS) {
@@ -268,7 +301,10 @@ function extractAnswer(sinceMs, nonce) {
 // our matching USER_INPUT up to (not incl.) the next USER_INPUT, so multiple runs
 // appended to one transcript file don't bleed together.
 function extractFromRows(rows, nonce) {
-  const sorted = rows.slice().sort((a, b) => Number(a.step_index ?? 0) - Number(b.step_index ?? 0));
+  // Guard against non-object rows (a bare `null`/number/true line is valid JSONL
+  // and would otherwise crash the sort/access below).
+  const sorted = rows.filter((o) => o && typeof o === "object")
+    .sort((a, b) => Number(a.step_index ?? 0) - Number(b.step_index ?? 0));
   const startIdx = sorted.findIndex(
     (o) => o.type === "USER_INPUT" && typeof o.content === "string" && o.content.includes(nonce),
   );
@@ -278,12 +314,21 @@ function extractFromRows(rows, nonce) {
     if (sorted[i].type === "USER_INPUT") { endIdx = i; break; }
   }
   const runRows = sorted.slice(startIdx + 1, endIdx); // exclude our prompt row
-  // Precise parser (known format):
-  const segs = runRows
-    .filter((o) => o.type === "PLANNER_RESPONSE" && o.source === "MODEL" && o.content)
-    .map((o) => String(o.content).trim())
-    .filter(Boolean);
-  if (segs.length) return { matched: true, answer: segs.join("\n\n"), formatDrift: false };
+  // Precise parser (known format). agy emits its reasoning/plan as PLANNER_RESPONSE
+  // rows too, interleaved with tool-call rows; the actual answer is the FINAL block
+  // of such rows. So take only the LAST CONTIGUOUS GROUP of MODEL PLANNER_RESPONSE
+  // rows (a non-MODEL-PLANNER_RESPONSE row — e.g. a tool call — breaks the group).
+  // This drops planning chatter while still joining a long answer that agy chunked
+  // across consecutive rows. (Reviewed: workflow finding #1 — chain-of-thought leak.)
+  const isModelResp = (o) => o.type === "PLANNER_RESPONSE" && o.source === "MODEL" && o.content && String(o.content).trim();
+  let lastGroup = [];
+  let cur = [];
+  for (const o of runRows) {
+    if (isModelResp(o)) { cur.push(String(o.content).trim()); }
+    else if (cur.length) { lastGroup = cur; cur = []; }
+  }
+  if (cur.length) lastGroup = cur;
+  if (lastGroup.length) return { matched: true, answer: lastGroup.join("\n\n"), formatDrift: false };
   // Self-heal layer 1: heuristic (survives field/type renames).
   const heur = heuristicAnswer(runRows, nonce);
   if (heur) return { matched: true, answer: heur, formatDrift: false };
@@ -613,10 +658,11 @@ export { extractAnswer, extractFromRows, heuristicAnswer, parseFlags, resolveRea
 
 // ---------- main ----------
 // Only run the CLI when executed directly (node agy-companion.mjs ...), not when
-// imported by a test. argv[1] is the script path; compare to this module's URL.
+// imported by a test. Use pathToFileURL so paths with #, %, spaces, etc. are
+// percent-encoded the same way import.meta.url is (manual string building wasn't).
 const isMain = (() => {
-  try { return process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, "/")}`).href; }
-  catch { return true; }
+  try { return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href; }
+  catch { return false; }
 })();
 
 const [, , sub, ...rest] = process.argv;

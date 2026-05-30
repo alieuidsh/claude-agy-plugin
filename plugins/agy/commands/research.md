@@ -20,6 +20,7 @@ Steps:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" research < "$TMPDIR/agy_prompt_<unique>.txt"
 rm -f "$TMPDIR/agy_prompt_<unique>.txt"
 ```
+   (On Windows cmd: `node "%CLAUDE_PLUGIN_ROOT%\scripts\agy-companion.mjs" research < "%TEMP%\agy_prompt_<unique>.txt"` then `del "%TEMP%\agy_prompt_<unique>.txt"`.)
    Never interpolate the question into the shell command string; never reuse a fixed filename.
 3. Present agy's synthesized answer, attributed to agy / Gemini. Treat it as a
    second opinion and apply your own judgment.

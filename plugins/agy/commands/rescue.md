@@ -24,6 +24,7 @@ Steps:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" rescue < "$TMPDIR/agy_prompt_<unique>.txt"
 rm -f "$TMPDIR/agy_prompt_<unique>.txt"
 ```
+   (On Windows cmd: `node "%CLAUDE_PLUGIN_ROOT%\scripts\agy-companion.mjs" rescue < "%TEMP%\agy_prompt_<unique>.txt"` then `del "%TEMP%\agy_prompt_<unique>.txt"`.)
    - `--background` (or large multi-file task) → run that same command with
      `Bash(..., run_in_background: true)`, then tell the user: "agy task started.
      Check `/agy:status`."

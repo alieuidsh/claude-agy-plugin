@@ -1,0 +1,5 @@
+{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","content":"[run:NONCE_OBJ]\nSurvive non-object lines."}
+null
+42
+true
+{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","content":"Survived non-object JSONL rows."}
