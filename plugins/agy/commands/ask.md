@@ -23,7 +23,7 @@ Steps:
 node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" ask < "$TMPDIR/agy_prompt_<unique>.txt"
 rm -f "$TMPDIR/agy_prompt_<unique>.txt"
 ```
-   (Windows: `node "%CLAUDE_PLUGIN_ROOT%\scripts\agy-companion.mjs" ask < "%TEMP%\agy_prompt_<unique>.txt"`.)
+   (Windows: `node "%CLAUDE_PLUGIN_ROOT%\scripts\agy-companion.mjs" ask < "%TEMP%\agy_prompt_<unique>.txt"` then `del "%TEMP%\agy_prompt_<unique>.txt"`.)
 
    The companion reads the prompt from stdin, so no user text ever touches the shell
    command line. Never interpolate the raw question into the `node` string, and never
