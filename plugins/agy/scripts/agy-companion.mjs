@@ -118,10 +118,12 @@ function runAgy(prompt, { workdir = process.cwd(), timeoutMs = DEFAULT_TIMEOUT_M
           return;
         }
         if (res.answer == null) {
-          if (res.formatDrift) {
-            // We found OUR run's transcript but couldn't parse a response: agy's
-            // output format probably changed. Tell the user to update the plugin.
-            done({ ok: false, error: "agy ran but its transcript format wasn't recognized — the agy CLI may have changed. Update this plugin: `claude plugin update agy` (then restart). If it persists, the plugin needs a new release." });
+          if (res.formatDrift && res.transcriptPath) {
+            // Self-heal layer 2: hand the raw transcript path back so the caller can
+            // have Claude extract the answer directly — no plugin update needed.
+            done({ ok: false, formatDrift: true, transcriptPath: res.transcriptPath, error: "agy transcript format not recognized" });
+          } else if (res.formatDrift) {
+            done({ ok: false, error: "agy ran but its transcript format wasn't recognized — the agy CLI may have changed. Update this plugin: `claude plugin update agy` (then restart)." });
           } else {
             const hint = stderr.trim() ? ` agy stderr: ${stderr.trim().slice(0, 300)}` : "";
             done({ ok: false, error: `agy produced no matching response${exitInfo ? ` (${exitInfo})` : ""}.${hint}` });
@@ -175,15 +177,46 @@ function killTree(pid) {
   } catch { /* already gone */ }
 }
 
+// Format-agnostic fallback (SELF-HEAL layer 1): if agy renames its fields/types,
+// the precise parser below returns nothing. Rather than fail, try to recover the
+// answer from rows that still "look like" model output, reading ANY string field —
+// so most schema tweaks are handled automatically, with no plugin update.
+function heuristicAnswer(runRows, nonce) {
+  const looksModel = (o) => {
+    const t = (String(o.type || "") + " " + String(o.source || "")).toLowerCase();
+    return /response|model|assistant|answer|reply/.test(t) && !/user|request|tool|system/.test(t);
+  };
+  const cand = runRows.filter(looksModel);
+  if (!cand.length) return null;
+  // Skip structural/metadata fields; keep prose-like values (has whitespace, or
+  // long) so we don't mistake a type name like "PLANNER_STEP" for answer text.
+  const STRUCT = new Set(["type", "source", "role", "id", "step_index", "created_at", "status", "name", "tool", "kind"]);
+  const strings = [];
+  for (const o of cand) {
+    for (const [k, v] of Object.entries(o)) {
+      if (STRUCT.has(k)) continue;
+      if (typeof v !== "string") continue;
+      const s = v.trim();
+      if (s.includes(nonce)) continue;
+      if (s.length >= 40 || (s.length >= 12 && /\s/.test(s))) strings.push(s);
+    }
+  }
+  if (!strings.length) return null;
+  const seen = new Set(); const uniq = [];
+  for (const s of strings) if (!seen.has(s)) { seen.add(s); uniq.push(s); }
+  return uniq.join("\n\n");
+}
+
 // ---------- read agy's answer from this run's transcript ----------
-// Returns { answer, formatDrift }:
-//   answer      — the joined MODEL response text, or null if not found
-//   formatDrift — true when we located THIS run's transcript (our nonce is in it,
-//                 so agy DID run our prompt) but found no MODEL response in the
-//                 expected shape. That strongly implies agy changed its transcript
-//                 format → the plugin needs updating, NOT an auth/timeout problem.
+// Returns { answer, formatDrift, transcriptPath }:
+//   answer        — the joined response text, or null if not found
+//   formatDrift   — true when we found THIS run's transcript (our nonce is in it, so
+//                   agy DID run our prompt) but neither the precise parser nor the
+//                   heuristic could extract a response → agy's schema changed.
+//   transcriptPath— path of our run's transcript, so the caller can hand it to
+//                   Claude for self-healing extraction (layer 2) without an update.
 function extractAnswer(sinceMs, nonce) {
-  if (!existsSync(BRAIN)) return { answer: null, formatDrift: false };
+  if (!existsSync(BRAIN)) return { answer: null, formatDrift: false, transcriptPath: null };
   const files = [];
   const stack = [BRAIN];
   while (stack.length) {
@@ -221,16 +254,22 @@ function extractAnswer(sinceMs, nonce) {
       for (let i = startIdx + 1; i < rows.length; i++) {
         if (rows[i].type === "USER_INPUT") { endIdx = i; break; }
       }
-      const segs = rows.slice(startIdx, endIdx)
+      const runRows = rows.slice(startIdx + 1, endIdx); // exclude our prompt row
+      // Precise parser (known format):
+      const segs = runRows
         .filter((o) => o.type === "PLANNER_RESPONSE" && o.source === "MODEL" && o.content)
-        .map((o) => o.content.trim())
+        .map((o) => String(o.content).trim())
         .filter(Boolean);
-      if (segs.length) return { answer: segs.join("\n\n"), formatDrift: false };
+      if (segs.length) return { answer: segs.join("\n\n"), formatDrift: false, transcriptPath: f };
+      // Self-heal layer 1: heuristic (survives field/type renames).
+      const heur = heuristicAnswer(runRows, nonce);
+      if (heur) return { answer: heur, formatDrift: false, transcriptPath: f };
+      // Found our transcript but couldn't extract → real drift; hand path to caller
+      // so Claude can read it directly (self-heal layer 2).
+      return { answer: null, formatDrift: true, transcriptPath: f };
     }
-    // Nonce given: if we found our transcript but no expected MODEL rows, the
-    // transcript schema likely changed → signal formatDrift so the caller can
-    // tell the user to update the plugin instead of guessing it's an auth issue.
-    return { answer: null, formatDrift: foundMyTranscript };
+    // Nonce never found in any recent transcript → agy probably didn't run (timeout/auth).
+    return { answer: null, formatDrift: false, transcriptPath: null };
   }
 
   // No nonce: newest single MODEL response across recent transcripts.
@@ -245,7 +284,7 @@ function extractAnswer(sinceMs, nonce) {
       }
     }
   }
-  return { answer: best, formatDrift: false };
+  return { answer: best, formatDrift: false, transcriptPath: null };
 }
 
 function parseJsonl(file) {
@@ -344,17 +383,43 @@ async function runJob(kind, prompt, { workdir, timeoutMs, readOnly = false } = {
     },
   });
 
-  const out = r.ok ? r.answer : `ERROR: ${r.error}`;
+  let out, ok = r.ok;
+  if (r.ok) {
+    out = r.answer;
+  } else if (r.formatDrift && r.transcriptPath) {
+    // Self-heal layer 2: emit a structured hand-off the calling assistant can act on.
+    out = driftHandoffBlock(r.transcriptPath, nonce);
+    ok = true; // recoverable hand-off, not a hard failure
+  } else {
+    out = `ERROR: ${r.error}`;
+  }
   writeFileSync(jobOutPath(id), out, "utf8");
   const m = readMeta(id);
-  m.status = r.ok ? "done" : "failed";
+  m.status = ok ? "done" : "failed";
   m.end = new Date().toISOString();
   writeMeta(id, m);
 
   // Print the answer to stdout (clean UTF-8). Use a callback to ensure the write
   // flushes before we exit (process.exit can truncate a pending pipe write).
   await new Promise((res) => process.stdout.write(out + "\n", () => res()));
-  return r.ok ? 0 : 1;
+  return ok ? 0 : 1;
+}
+
+// Self-heal layer 2: when the plugin can't parse agy's (changed) transcript, emit
+// this block. The calling assistant (Claude) reads the raw transcript and extracts
+// the answer itself — recovering on the spot, with NO plugin update required.
+function driftHandoffBlock(transcriptPath, nonce) {
+  return [
+    "AGY_NEEDS_CLAUDE_EXTRACTION",
+    "agy ran successfully, but this plugin could not parse its answer — agy's",
+    "transcript format appears to have changed. Recover it yourself, no update needed:",
+    `  1. Read this file: ${transcriptPath}`,
+    `  2. Find the entry whose text contains the marker: [run:${nonce}]`,
+    "  3. After that entry (up to the next user-input entry), gather the model's",
+    "     actual reply text — the substantive answer, not tool-call/planning chatter.",
+    "  4. Present that text to the user as agy's answer.",
+    "(Optional: mention `/plugin update agy` may restore the clean path — not required.)",
+  ].join("\n");
 }
 
 // ---------- subcommands: status / result / cancel / setup ----------
