@@ -54,13 +54,16 @@ temp file and agy is told to read it, avoiding the OS command-line length limit
 
 ## Environment matrix (manual)
 
-| OS | Node | agy CLI | `/agy:setup` | `/agy:ask` | `/agy:review` | parallel `/agy:ask` ×2 | `/agy:cancel` | `/agy:install` |
-|---|---|---|---|---|---|---|---|---|
-| Windows 11 | 24.x | 1.0.x | ✅ | ✅ | ✅ (via diff) | ✅ | ✅ (by PID) | ✅ "already installed" branch; full install not re-run |
-| Ubuntu | — | — | ⏳ not yet | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
-| macOS | — | — | ⏳ not yet | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
+| OS | Node | agy CLI | parser (`npm test`) | `check-install` / `status` (Linux paths) | full agy interaction |
+|---|---|---|---|---|---|
+| Windows 11 | 24.x | 1.0.x | ✅ 18/18 | ✅ | ✅ setup/ask/review/parallel/cancel; install "already-installed" branch |
+| Linux x86_64 (Ubuntu-class) | 22.x | not installed | ✅ 18/18 (real hardware) | ✅ `findAgy` returns null cleanly; `~/.agy-jobs` path OK | ⏳ needs agy + Google sign-in |
+| macOS | — | — | ✅ via CI (Node 18/20/22) | ⏳ | ⏳ needs agy + Google sign-in |
 
-Legend: ✅ verified · ⏳ designed-for, not yet tested on real hardware.
+Legend: ✅ verified · ⏳ not yet on real hardware. The parser core (the plugin's
+brain) is now verified on real Linux + Windows and on CI across all three OSes; the
+remaining ⏳ is the live agy round-trip, which needs the agy CLI installed and a
+Google sign-in on that box.
 
 ## Known not-yet-verified
 

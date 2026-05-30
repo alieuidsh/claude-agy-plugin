@@ -5,6 +5,20 @@ All notable changes to this project are documented here. Versions follow
 `plugins/agy/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, and
 `package.json`.
 
+## [1.4.6]
+
+### Added
+- **Real Linux hardware verification**: parser suite (18/18) + `node --check` run on
+  a real Linux x86_64 box (Node 22). `check-install` correctly reports `NOT_INSTALLED`
+  and `status` creates the `~/.agy-jobs` path — confirming the cross-platform code
+  paths, not just CI. TEST_MATRIX updated.
+
+## [1.4.5]
+
+### Added
+- GitHub Actions CI (`node --check` + `npm test`) on ubuntu/macos/windows × Node 18/20/22.
+- `CHANGELOG.md`, `SECURITY.md`, `CONTRIBUTING.md`.
+
 ## [1.4.4]
 
 ### Fixed
