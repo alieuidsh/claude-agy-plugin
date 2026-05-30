@@ -72,7 +72,7 @@ function findAgy() {
 // opts.readOnly => do NOT pass --dangerously-skip-permissions, no writable dir.
 // A per-run nonce is embedded in the prompt so extractAnswer() can correlate the
 // transcript to THIS run (prevents picking another concurrent job's answer).
-function runAgy(prompt, { workdir = process.cwd(), timeoutMs = DEFAULT_TIMEOUT_MS, readOnly = false, nonce } = {}) {
+function runAgy(prompt, { workdir = process.cwd(), timeoutMs = DEFAULT_TIMEOUT_MS, readOnly = false, nonce, onSpawn } = {}) {
   return new Promise((resolve) => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
@@ -147,8 +147,10 @@ function runAgy(prompt, { workdir = process.cwd(), timeoutMs = DEFAULT_TIMEOUT_M
       done({ ok: false, error: `failed to spawn agy: ${e.message}` });
     });
 
-    // expose pid for the caller to persist (for targeted cancel)
-    runAgy._lastPid = child.pid;
+    // Report the PID to the caller IMMEDIATELY on spawn (not after the run ends),
+    // so a concurrent `cancel` can target this job's process tree while it runs.
+    // (A shared static would be clobbered by parallel jobs — use the callback.)
+    if (typeof onSpawn === "function" && child.pid) onSpawn(child.pid);
   });
 }
 
@@ -196,9 +198,11 @@ function extractAnswer(sinceMs, nonce) {
         (o) => o.type === "USER_INPUT" && typeof o.content === "string" && o.content.includes(nonce),
       );
       if (!mine) continue;
+      // Order by step_index (monotonic, written sequentially) — more reliable than
+      // created_at string compare, which ties on coarse (~15ms) Windows clocks.
       const segs = rows
         .filter((o) => o.type === "PLANNER_RESPONSE" && o.source === "MODEL" && o.content)
-        .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+        .sort((a, b) => Number(a.step_index ?? 0) - Number(b.step_index ?? 0))
         .map((o) => o.content.trim())
         .filter(Boolean);
       if (segs.length) return segs.join("\n\n");
@@ -303,12 +307,13 @@ async function runJob(kind, prompt, { workdir, timeoutMs, readOnly = false } = {
   writeMeta(id, { id, kind, status: "running", prompt: promptPreview, pid: null, start: new Date().toISOString(), end: null });
   process.stderr.write(`[agy] job ${id} (${kind}) started\n`);
 
-  const r = await runAgy(prompt, { workdir, timeoutMs, readOnly, nonce });
-
-  // persist pid (best-effort) for targeted cancel
-  const m0 = readMeta(id);
-  m0.pid = runAgy._lastPid || null;
-  writeMeta(id, m0);
+  // onSpawn persists the PID the moment agy launches, so `cancel` works mid-run.
+  const r = await runAgy(prompt, {
+    workdir, timeoutMs, readOnly, nonce,
+    onSpawn: (pid) => {
+      try { const mm = readMeta(id); mm.pid = pid; writeMeta(id, mm); } catch { /* meta race; non-fatal */ }
+    },
+  });
 
   const out = r.ok ? r.answer : `ERROR: ${r.error}`;
   writeFileSync(jobOutPath(id), out, "utf8");
