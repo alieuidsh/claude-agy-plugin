@@ -50,8 +50,11 @@ function findAgy() {
   const candidates = [];
   if (IS_WIN) {
     const la = process.env.LOCALAPPDATA || join(HOME, "AppData", "Local");
-    candidates.push(join(la, "agy", "bin", "agy.exe"));
+    candidates.push(join(la, "agy", "bin", "agy.exe"));     // older layout (this machine)
+    candidates.push(join(la, "Antigravity", "agy.exe"));    // official installer layout
+    candidates.push(join(la, "Antigravity", "bin", "agy.exe"));
   } else {
+    candidates.push(join(HOME, ".local", "bin", "agy"));    // official installer layout
     candidates.push(join(HOME, ".agy", "bin", "agy"));
     candidates.push("/usr/local/bin/agy");
     candidates.push("/usr/bin/agy");
@@ -79,7 +82,7 @@ function runAgy(prompt, { workdir = process.cwd(), timeoutMs = DEFAULT_TIMEOUT_M
 
     const exe = findAgy();
     if (!exe) {
-      done({ ok: false, error: "agy binary not found. Set AGY_BIN or install Antigravity CLI." });
+      done({ ok: false, error: "agy CLI not installed. Run /agy:install (installs it for you, asks first), or install manually: " + officialInstallCmd() });
       return;
     }
     const startedAt = Date.now();
@@ -418,7 +421,7 @@ function cmdCancel(rawId) {
 async function cmdSetup() {
   const exe = findAgy();
   console.log(`agy binary: ${exe || "NOT FOUND"}`);
-  if (!exe) { console.log("Install Antigravity CLI, or set AGY_BIN to the agy executable path."); return 1; }
+  if (!exe) { console.log(notInstalledHint()); return 1; }
   console.log(`brain dir : ${existsSync(BRAIN) ? BRAIN : "(missing — agy never run?)"}`);
   console.log("Probing agy (auth + answer capture)…");
   const nonce = `setup-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
@@ -427,6 +430,53 @@ async function cmdSetup() {
   if (r.ok) { console.log(`RESULT: ⚠️ agy answered but unexpected: ${r.answer.slice(0, 120)}`); return 0; }
   console.log(`RESULT: ❌ ${r.error}`);
   console.log("If this is an auth error, run `agy` once interactively to sign in.");
+  return 1;
+}
+
+// Official agy install command for the current OS (verified: antigravity.google/docs/cli-install).
+function officialInstallCmd() {
+  return IS_WIN
+    ? `powershell -NoProfile -Command "irm https://antigravity.google/cli/install.ps1 | iex"`
+    : `curl -fsSL https://antigravity.google/cli/install.sh | bash`;
+}
+function notInstalledHint() {
+  return [
+    "The agy (Google Antigravity) CLI is not installed.",
+    "",
+    "Install it with the official command for your OS:",
+    `  ${officialInstallCmd()}`,
+    "",
+    "Or run `/agy:install` and I can install it for you (it asks first).",
+    "After installing, run `agy` once interactively to sign in with your Google account.",
+  ].join("\n");
+}
+
+// `install` subcommand: run the official installer for this OS, then verify.
+async function cmdInstall() {
+  const existing = findAgy();
+  if (existing) { console.log(`agy is already installed at: ${existing}`); return 0; }
+  const cmd = officialInstallCmd();
+  console.log(`Installing the agy CLI via the official installer:\n  ${cmd}\n`);
+  try {
+    // Inherit stdio so the user can see the installer's progress/prompts.
+    if (IS_WIN) {
+      execSync(`powershell -NoProfile -Command "irm https://antigravity.google/cli/install.ps1 | iex"`, { stdio: "inherit" });
+    } else {
+      execSync(`curl -fsSL https://antigravity.google/cli/install.sh | bash`, { stdio: "inherit", shell: "/bin/bash" });
+    }
+  } catch (e) {
+    console.log(`\n❌ Installer failed: ${e.message}`);
+    console.log("You can install manually with the command above, then re-run /agy:setup.");
+    return 1;
+  }
+  const nowInstalled = findAgy();
+  if (nowInstalled) {
+    console.log(`\n✅ agy installed at: ${nowInstalled}`);
+    console.log("Next: run `agy` once interactively to sign in with your Google account, then /agy:setup to verify.");
+    return 0;
+  }
+  console.log("\n⚠️ Installer finished but agy was not found on PATH/known locations.");
+  console.log("You may need to restart your terminal, or set AGY_BIN to the agy executable path.");
   return 1;
 }
 
@@ -498,11 +548,12 @@ const cwd = process.cwd();
       break;
     }
     case "setup": code = await cmdSetup(); break;
+    case "install": code = await cmdInstall(); break;
     case "status": code = cmdStatus(); break;
     case "result": code = cmdResult(rest[0]); break;
     case "cancel": code = cmdCancel(rest[0]); break;
     default:
-      console.error(`Unknown subcommand: ${sub || "(none)"}\nValid: ask task research review adversarial-review setup status result cancel`);
+      console.error(`Unknown subcommand: ${sub || "(none)"}\nValid: ask task research review adversarial-review setup install status result cancel`);
       code = 2;
   }
   process.exitCode = code; // let stdout flush naturally instead of hard process.exit

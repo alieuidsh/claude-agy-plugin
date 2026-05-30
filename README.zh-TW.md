@@ -36,6 +36,11 @@
 
 1. **Node.js**（v18+）。確認：`node --version`。
 2. **`agy` CLI**（Google Antigravity），已安裝並登入過一次。
+   - **沒裝？** 跑 **`/agy:install`** —— plugin 會偵測到沒裝並（詢問後）幫你裝。或手動裝：
+     - Windows：`irm https://antigravity.google/cli/install.ps1 | iex`
+     - macOS/Linux：`curl -fsSL https://antigravity.google/cli/install.sh | bash`
+   - 裝在別處的話，設環境變數 `AGY_BIN` 指向完整路徑。
+   - 裝完後跑一次互動式 `agy` 用 Google 帳號登入。
    - Windows 預設：`%LOCALAPPDATA%\agy\bin\agy.exe`
    - Linux/macOS：`~/.agy/bin/agy` 或在 `PATH` 上
    - 裝在別處的話，設環境變數 `AGY_BIN` 指向它的完整路徑。

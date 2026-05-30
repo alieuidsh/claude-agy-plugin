@@ -32,7 +32,11 @@ Permission override (optional, mirrors codex): append `--write` or `--read-only`
 to the node command before the `<` redirect to override the subcommand's default.
 
 Subcommands: `ask`, `task` (write-capable), `research`, `review`,
-`adversarial-review`, `setup`, `status`, `result`, `cancel`.
+`adversarial-review`, `setup`, `install`, `status`, `result`, `cancel`.
+
+If the agy CLI is not installed, any command will say so and point to `/agy:install`,
+which runs the official installer (Win: `irm https://antigravity.google/cli/install.ps1 | iex`;
+Unix: `curl -fsSL https://antigravity.google/cli/install.sh | bash`) after asking the user.
 
 The companion handles three agy quirks for you, so do not reimplement them:
 1. **`agy --print` writes its answer to the TTY, not stdout.** The companion reads

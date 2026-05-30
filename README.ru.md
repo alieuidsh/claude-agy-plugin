@@ -39,6 +39,12 @@ skill сработает автоматически.
 
 1. **Node.js** (v18+). Проверка: `node --version`.
 2. **CLI `agy`** (Google Antigravity), установлен и один раз выполнен вход.
+   - **Нет CLI?** Выполните **`/agy:install`** — плагин обнаружит отсутствие и
+     установит его (после запроса). Или вручную:
+     - Windows: `irm https://antigravity.google/cli/install.ps1 | iex`
+     - macOS/Linux: `curl -fsSL https://antigravity.google/cli/install.sh | bash`
+   - Если установлен в другом месте — задайте переменную `AGY_BIN` с полным путём.
+   - После установки запустите `agy` интерактивно один раз для входа в аккаунт Google.
    - Windows по умолчанию: `%LOCALAPPDATA%\agy\bin\agy.exe`
    - Linux/macOS: `~/.agy/bin/agy` или в `PATH`
    - Если установлен в другом месте — задайте переменную окружения `AGY_BIN`

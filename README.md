@@ -39,11 +39,13 @@ without touching files.
 
 1. **Node.js** (v18+). Check: `node --version`.
 2. **The `agy` CLI** (Google Antigravity), installed and signed in once.
-   - Windows default: `%LOCALAPPDATA%\agy\bin\agy.exe`
-   - Linux/macOS: `~/.agy/bin/agy` or on `PATH`
+   - **Don't have it?** Run **`/agy:install`** — the plugin detects it's missing and
+     installs it for you (after asking). Or install manually:
+     - Windows: `irm https://antigravity.google/cli/install.ps1 | iex`
+     - macOS/Linux: `curl -fsSL https://antigravity.google/cli/install.sh | bash`
    - If installed elsewhere, set the `AGY_BIN` environment variable to its full path.
-   - Auth is silent via the OS keyring; if calls time out, run `agy` once
-     interactively to sign in.
+   - Auth is silent via the OS keyring; after install, run `agy` once interactively
+     to sign in with a Google account.
 
 Verify everything with `/agy:setup` after install.
 

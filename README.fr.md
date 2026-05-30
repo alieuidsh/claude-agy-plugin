@@ -39,6 +39,12 @@ limite aux conseils sans toucher aux fichiers.
 
 1. **Node.js** (v18+). Vérifier : `node --version`.
 2. **La CLI `agy`** (Google Antigravity), installée et connectée une fois.
+   - **Pas installée ?** Lancez **`/agy:install`** — le plugin détecte l'absence et
+     l'installe pour vous (après confirmation). Ou manuellement :
+     - Windows : `irm https://antigravity.google/cli/install.ps1 | iex`
+     - macOS/Linux : `curl -fsSL https://antigravity.google/cli/install.sh | bash`
+   - Si elle est ailleurs, définissez la variable d'environnement `AGY_BIN` (chemin complet).
+   - Après l'installation, lancez `agy` une fois en interactif pour vous connecter (compte Google).
    - Défaut Windows : `%LOCALAPPDATA%\agy\bin\agy.exe`
    - Linux/macOS : `~/.agy/bin/agy` ou dans le `PATH`
    - Si elle est ailleurs, définissez la variable d'environnement `AGY_BIN` avec
