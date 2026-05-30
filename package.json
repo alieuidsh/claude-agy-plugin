@@ -1,6 +1,6 @@
 {
   "name": "claude-agy-plugin",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "private": true,
   "description": "Use Google Antigravity (Gemini) from Claude Code — the agy counterpart to the codex plugin.",
   "type": "module",
