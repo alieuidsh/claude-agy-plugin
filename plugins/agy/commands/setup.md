@@ -17,3 +17,6 @@ Report:
 - `node-pty: MISSING` → run `npm install` in the plugin dir (v2 needs node-pty to
   synthesize a console; agy outputs nothing without one).
 - auth error → run `agy` once interactively to sign in. Don't loop-retry.
+
+Note: agy's model is fixed by the Antigravity backend in `--print` mode (no `--model`
+flag; settings.json `model` and env vars are ignored for non-interactive runs). Not a bug.

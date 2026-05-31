@@ -36,6 +36,17 @@ Subcommands: ask, task (write), research, review (read-only), adversarial-review
 - ask/research read-only by default; `--write` allows edits.
 - rescue/task write-capable by default; `--read-only` for advice-only.
 - review/adversarial-review ALWAYS read-only (use rescue to act on findings).
+- Read-only runs add agy's `--sandbox` (terminal restrictions): agy can still read and
+  analyze files, but system/terminal side-effects are blocked. Write runs use
+  `--dangerously-skip-permissions` (no interactive approval is possible in print mode).
+
+## Model (not selectable)
+
+agy's model is fixed by the Antigravity backend for non-interactive (`--print`) runs —
+verified: there is no `--model` flag, `~/.gemini/antigravity-cli/settings.json`'s `model`
+field is ignored in print mode (cli.log shows `model=""` → backend forces a Flash tier),
+and env vars don't override it. The settings.json `model` only affects the interactive
+GUI. So treat the model as a given; don't add a model option to these commands.
 
 ## If it stops working
 

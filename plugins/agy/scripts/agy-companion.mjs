@@ -134,8 +134,12 @@ async function runAgy(prompt, { readOnly = false, timeoutMs = DEFAULT_TIMEOUT_MS
   const pty = await ensurePty();
   if (!pty) return { ok: false, error: "node-pty unavailable and auto-install failed. Ensure Node.js/npm are installed and you have network, then run /agy:setup. (v2 needs a synthesized console to drive agy.)" };
 
+  // Read-only modes run agy with --sandbox (terminal restrictions): verified it still
+  // lets agy read/analyze files, but blocks system/terminal side-effects. Write modes
+  // pass --dangerously-skip-permissions so agy can edit without an (impossible-in-print) prompt.
   const args = [];
-  if (!readOnly) args.push("--dangerously-skip-permissions");
+  if (readOnly) args.push("--sandbox");
+  else args.push("--dangerously-skip-permissions");
   args.push("--print", prompt);
 
   return await new Promise((resolve) => {
