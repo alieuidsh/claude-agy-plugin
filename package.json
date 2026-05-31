@@ -1,0 +1,10 @@
+{
+  "name": "claude-agy-plugin",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Use Google Antigravity (Gemini) from Claude Code — agy counterpart to codex. Drives agy via ConPTY (node-pty).",
+  "type": "module",
+  "dependencies": { "node-pty": "^1.0.0" },
+  "scripts": { "test": "node tests/clean-output.test.mjs" },
+  "license": "MIT"
+}

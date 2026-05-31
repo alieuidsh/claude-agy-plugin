@@ -1,0 +1,18 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local agy job state (per-machine)
+.agy-jobs/
+
+# Editor
+.vscode/
+.idea/
+
+# Dev scratch
+_*.txt
+*.scratch
