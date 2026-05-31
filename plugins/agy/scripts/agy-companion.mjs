@@ -69,11 +69,12 @@ function loadPty() {
 export function cleanOutput(raw) {
   if (typeof raw !== "string") return "";
   let s = raw;
-  s = s.replace(/^﻿/, "").replace(/﻿/g, "");          // BOM (anywhere)
+  s = s.replace(/﻿/g, "");                                  // BOM (anywhere)
   s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "");      // OSC ... BEL/ST
   s = s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");              // CSI
   s = s.replace(/\x1b[=>]/g, "").replace(/\x1b[()][AB0-2]/g, "");// charset/keypad
-  s = s.replace(/\r(?!\n)/g, "");                                // lone CR (drip redraws)
+  s = s.replace(/\r\n/g, "\n");                                  // CRLF -> LF (PTY uses CRLF)
+  s = s.replace(/\r/g, "");                                      // any remaining lone CR (drip redraws)
   s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");        // other control (keep \n \t)
   return s;
 }
