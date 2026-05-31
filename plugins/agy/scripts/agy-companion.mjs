@@ -39,6 +39,55 @@ const MIN_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 1_800_000;
 const JOB_ID_RE = /^\d{8}_\d{6}_\d{4}$/;
 
+// ---------- model selection ----------
+// agy has NO --model CLI flag; the model is read from settings.json's "model" field
+// (verified: setting "Gemini 3.1 Pro (High)" → backend receives exactly that; an
+// unknown label falls back to Flash). So to pick a model per-call we briefly rewrite
+// settings.json, run, then restore it (serialized by a lock; see withModel()).
+const DEFAULT_MODEL = "Gemini 3.1 Pro (High)"; // strongest Pro available now
+const KNOWN_MODELS = [
+  // Verified to exist: 3.1 Pro (High), 3.5 Flash (High/Medium). Others are the
+  // expected tiers; an unsupported one safely falls back (and we report the actual
+  // model used). New models (e.g. a future "Gemini 3.5 Pro (High)") work too — just
+  // pass the full label to --model; you don't have to wait for this list to update.
+  { label: "Gemini 3.1 Pro (High)", aliases: ["pro", "pro-high", "3.1-pro", "3.1-pro-high"] },
+  { label: "Gemini 3.1 Pro (Medium)", aliases: ["pro-medium", "3.1-pro-medium"] },
+  { label: "Gemini 3.1 Pro (Low)", aliases: ["pro-low", "3.1-pro-low"] },
+  { label: "Gemini 3.5 Flash (High)", aliases: ["flash", "flash-high", "3.5-flash", "3.5-flash-high"] },
+  { label: "Gemini 3.5 Flash (Medium)", aliases: ["flash-medium", "3.5-flash-medium"] },
+  { label: "Gemini 3.5 Flash (Low)", aliases: ["flash-low", "3.5-flash-low"] },
+];
+function agyDir() { return join(HOME, ".gemini", "antigravity-cli"); }
+function settingsFile() {
+  if (process.env.AGY_SETTINGS && existsSync(process.env.AGY_SETTINGS)) return process.env.AGY_SETTINGS;
+  const p = join(agyDir(), "settings.json");
+  return existsSync(p) ? p : null;
+}
+// Resolve an alias / full label / undefined into a concrete label.
+function resolveModel(input) {
+  if (!input) return DEFAULT_MODEL;
+  const s = String(input).trim();
+  if (!s) return DEFAULT_MODEL;
+  const low = s.toLowerCase();
+  for (const m of KNOWN_MODELS) {
+    if (m.label.toLowerCase() === low || m.aliases.includes(low)) return m.label;
+  }
+  return s; // pass through (full label or a model newer than this list)
+}
+// Read the model agy actually propagated to the backend, from cli.log (ground truth,
+// not the model's self-report). Lets us tell the user if their pick fell back.
+function readActualModel() {
+  try {
+    const log = join(agyDir(), "cli.log");
+    if (!existsSync(log)) return null;
+    const txt = readFileSync(log, "utf8");
+    const re = /Propagating selected model override to backend: label="([^"]*)"/g;
+    let m, last = null;
+    while ((m = re.exec(txt)) !== null) last = m[1];
+    return last;
+  } catch { return null; }
+}
+
 // ---------- locate the agy binary (cross-platform) ----------
 function findAgy() {
   if (process.env.AGY_BIN && existsSync(process.env.AGY_BIN)) return process.env.AGY_BIN;
@@ -127,12 +176,44 @@ export function extractAnswer(rawOutput) {
   return clean;
 }
 
+// Run fn() with settings.json's model temporarily set to targetLabel, then restore
+// the original. A mkdir lock serializes concurrent model-scoped runs so two jobs with
+// different models can't clash; the finally always restores (even on throw/timeout).
+async function withModel(targetLabel, fn) {
+  const sf = settingsFile();
+  if (!sf) return await fn(); // no settings file — use agy's current default
+  let obj;
+  try { obj = JSON.parse(readFileSync(sf, "utf8")); } catch { return await fn(); }
+  const original = Object.prototype.hasOwnProperty.call(obj, "model") ? obj.model : undefined;
+  if (original === targetLabel) return await fn(); // already the target; nothing to do
+  const lock = join(agyDir(), ".agy-model.lock");
+  let locked = false;
+  for (let i = 0; i < 300; i++) {
+    try { const st = statSync(lock); if (Date.now() - st.mtimeMs > 360_000) rmdirSync(lock); } catch {}
+    try { mkdirSync(lock); locked = true; break; } catch { await _sleep(1000); }
+  }
+  try {
+    const cur = JSON.parse(readFileSync(sf, "utf8"));
+    cur.model = targetLabel;
+    writeFileSync(sf, JSON.stringify(cur, null, 2), "utf8");
+    return await fn();
+  } finally {
+    try {
+      const cur = JSON.parse(readFileSync(sf, "utf8"));
+      if (original === undefined) delete cur.model; else cur.model = original;
+      writeFileSync(sf, JSON.stringify(cur, null, 2), "utf8");
+    } catch {}
+    if (locked) { try { rmdirSync(lock); } catch {} }
+  }
+}
+
 // ---------- run agy inside a ConPTY and capture the answer ----------
-async function runAgy(prompt, { readOnly = false, timeoutMs = DEFAULT_TIMEOUT_MS, onSpawn } = {}) {
+async function runAgy(prompt, { readOnly = false, timeoutMs = DEFAULT_TIMEOUT_MS, onSpawn, model } = {}) {
   const exe = findAgy();
   if (!exe) return { ok: false, error: "agy CLI not installed. Run /agy:install (asks first), or install manually: " + officialInstallCmd() };
   const pty = await ensurePty();
   if (!pty) return { ok: false, error: "node-pty unavailable and auto-install failed. Ensure Node.js/npm are installed and you have network, then run /agy:setup. (v2 needs a synthesized console to drive agy.)" };
+  const targetModel = resolveModel(model);
 
   // Read-only modes run agy with --sandbox (terminal restrictions): verified it still
   // lets agy read/analyze files, but blocks system/terminal side-effects. Write modes
@@ -142,7 +223,7 @@ async function runAgy(prompt, { readOnly = false, timeoutMs = DEFAULT_TIMEOUT_MS
   else args.push("--dangerously-skip-permissions");
   args.push("--print", prompt);
 
-  return await new Promise((resolve) => {
+  const result = await withModel(targetModel, () => new Promise((resolve) => {
     let buf = "";
     let settled = false;
     let timer = null;
@@ -177,7 +258,9 @@ async function runAgy(prompt, { readOnly = false, timeoutMs = DEFAULT_TIMEOUT_MS
       done(partial ? { ok: true, answer: partial } : { ok: false, error: `agy timed out after ${Math.round(timeoutMs / 1000)}s.` }, true);
     }, timeoutMs);
     if (timer.unref) timer.unref();
-  });
+  }));
+  if (result && result.ok) result.model = readActualModel() || targetModel;
+  return result;
 }
 
 // ---------- install helpers ----------
@@ -231,15 +314,17 @@ function readStdin() {
 }
 
 // ---------- run + record a job ----------
-async function runJob(kind, prompt, { readOnly, timeoutMs }) {
+async function runJob(kind, prompt, { readOnly, timeoutMs, model }) {
   ensureJobs();
   const id = newJobId();
-  writeMeta(id, { id, kind, status: "running", prompt: prompt.replace(/\s+/g, " ").slice(0, 200), pid: null, start: new Date().toISOString(), end: null });
-  process.stderr.write(`[agy] job ${id} (${kind}) started\n`);
-  const r = await runAgy(prompt, { readOnly, timeoutMs, onSpawn: (pid) => { try { const m = readMeta(id); m.pid = pid; writeMeta(id, m); } catch {} } });
+  const requested = resolveModel(model);
+  writeMeta(id, { id, kind, status: "running", model: requested, prompt: prompt.replace(/\s+/g, " ").slice(0, 200), pid: null, start: new Date().toISOString(), end: null });
+  process.stderr.write(`[agy] job ${id} (${kind}) started [model: ${requested}]\n`);
+  const r = await runAgy(prompt, { readOnly, timeoutMs, model, onSpawn: (pid) => { try { const m = readMeta(id); m.pid = pid; writeMeta(id, m); } catch {} } });
   const out = r.ok ? r.answer : `ERROR: ${r.error}`;
   writeFileSync(jobOut(id), out, "utf8");
-  const m = readMeta(id); m.status = r.ok ? "done" : "failed"; m.end = new Date().toISOString(); writeMeta(id, m);
+  const m = readMeta(id); m.status = r.ok ? "done" : "failed"; m.actualModel = r.ok ? (r.model || null) : null; m.end = new Date().toISOString(); writeMeta(id, m);
+  if (r.ok && r.model) process.stderr.write(`[agy] answered with model: ${r.model}\n`);
   await new Promise((res) => process.stdout.write(out + "\n", () => res()));
   return r.ok ? 0 : 1;
 }
@@ -275,6 +360,20 @@ async function cmdSetup() {
   if (r.ok && r.answer.includes("AGY_READY")) { console.log("RESULT: OK — agy is ready."); return 0; }
   if (r.ok) { console.log(`RESULT: agy answered unexpectedly: ${r.answer.slice(0, 120)}`); return 0; }
   console.log(`RESULT: ${r.error}`); return 1;
+}
+function cmdModels() {
+  const sf = settingsFile();
+  let curModel = null; try { if (sf) curModel = JSON.parse(readFileSync(sf, "utf8")).model; } catch {}
+  console.log(`Default model (used when --model is omitted): ${DEFAULT_MODEL}`);
+  console.log(`Your settings.json model (interactive default): ${curModel || "(unset)"}`);
+  console.log("");
+  console.log("Known models (pass the label or any alias to --model):");
+  for (const m of KNOWN_MODELS) console.log(`  ${m.label.padEnd(26)} aliases: ${m.aliases.join(", ")}`);
+  console.log("");
+  console.log("You can also pass ANY exact label (e.g. a future \"Gemini 3.5 Pro (High)\")");
+  console.log("— it works as soon as the backend offers it. Unknown labels fall back to a");
+  console.log("Flash tier; every run reports the model actually used.");
+  return 0;
 }
 function cmdStatus() {
   ensureJobs();
@@ -329,13 +428,14 @@ function cmdCancel(rawId) {
 
 // ---------- arg parsing ----------
 function parseFlags(rest) {
-  const out = { writeOverride: null, yes: false, timeoutMs: DEFAULT_TIMEOUT_MS };
+  const out = { writeOverride: null, yes: false, timeoutMs: DEFAULT_TIMEOUT_MS, model: undefined };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === "--write") out.writeOverride = true;
     else if (a === "--read-only" || a === "--readonly") out.writeOverride = false;
     else if (a === "--yes" || a === "-y") out.yes = true;
     else if (a === "--timeout" && rest[i + 1]) { const s = parseInt(rest[++i], 10); if (Number.isFinite(s) && s > 0) out.timeoutMs = Math.min(Math.max(s * 1000, MIN_TIMEOUT_MS), MAX_TIMEOUT_MS); }
+    else if (a === "--model" && rest[i + 1]) { out.model = rest[++i]; }
   }
   return out;
 }
@@ -350,18 +450,19 @@ async function main() {
   const stdin = ["ask", "task", "rescue", "research", "review", "adversarial-review"].includes(sub) ? readStdin() : "";
   let code = 0;
   switch (sub) {
-    case "ask": code = await runJob("ask", stdin, { readOnly: resolveReadOnly(true, f.writeOverride), timeoutMs: f.timeoutMs }); break;
-    case "task": case "rescue": code = await runJob("task", `Do this task in the current project. You MAY edit files.\n\n${stdin}`, { readOnly: resolveReadOnly(false, f.writeOverride), timeoutMs: f.timeoutMs }); break;
-    case "research": code = await runJob("research", `Research this and give a synthesized, well-structured answer:\n\n${stdin}`, { readOnly: resolveReadOnly(true, f.writeOverride), timeoutMs: f.timeoutMs }); break;
-    case "review": { const { diff } = collectDiff(); code = await runJob("review", reviewPrompt(stdin, diff, false), { readOnly: true, timeoutMs: f.timeoutMs }); break; }
-    case "adversarial-review": { const { diff } = collectDiff(); code = await runJob("adversarial-review", reviewPrompt(stdin, diff, true), { readOnly: true, timeoutMs: f.timeoutMs }); break; }
+    case "ask": code = await runJob("ask", stdin, { readOnly: resolveReadOnly(true, f.writeOverride), timeoutMs: f.timeoutMs, model: f.model }); break;
+    case "task": case "rescue": code = await runJob("task", `Do this task in the current project. You MAY edit files.\n\n${stdin}`, { readOnly: resolveReadOnly(false, f.writeOverride), timeoutMs: f.timeoutMs, model: f.model }); break;
+    case "research": code = await runJob("research", `Research this and give a synthesized, well-structured answer:\n\n${stdin}`, { readOnly: resolveReadOnly(true, f.writeOverride), timeoutMs: f.timeoutMs, model: f.model }); break;
+    case "review": { const { diff } = collectDiff(); code = await runJob("review", reviewPrompt(stdin, diff, false), { readOnly: true, timeoutMs: f.timeoutMs, model: f.model }); break; }
+    case "adversarial-review": { const { diff } = collectDiff(); code = await runJob("adversarial-review", reviewPrompt(stdin, diff, true), { readOnly: true, timeoutMs: f.timeoutMs, model: f.model }); break; }
     case "setup": code = await cmdSetup(); break;
+    case "models": code = cmdModels(); break;
     case "check-install": code = cmdCheckInstall(); break;
     case "install": code = await cmdInstall(f.yes); break;
     case "status": code = cmdStatus(); break;
     case "result": code = cmdResult(rest[0]); break;
     case "cancel": code = cmdCancel(rest[0]); break;
-    default: console.error(`Unknown subcommand: ${sub || "(none)"}\nValid: ask task research review adversarial-review setup check-install install status result cancel`); code = 2;
+    default: console.error(`Unknown subcommand: ${sub || "(none)"}\nValid: ask task research review adversarial-review setup models check-install install status result cancel`); code = 2;
   }
   process.exitCode = code;
   // On Windows, node-pty/ConPTY leaves handles open after the child exits, so the event

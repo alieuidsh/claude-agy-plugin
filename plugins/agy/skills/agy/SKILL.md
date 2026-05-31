@@ -1,6 +1,6 @@
 ---
 name: agy
-description: Delegate a coding task, second opinion, research, or deep investigation to Google Antigravity (the `agy` CLI, Gemini-backed) and return its answer — the agy counterpart to the codex plugin. TRIGGER when the user says "consult agy / Antigravity / Gemini", wants a second model's take on code, or asks agy to investigate/fix/research something. Slash commands: /agy:ask /agy:rescue /agy:review /agy:adversarial-review /agy:research /agy:setup /agy:install /agy:status /agy:result /agy:cancel.
+description: Delegate a coding task, second opinion, research, or deep investigation to Google Antigravity (the `agy` CLI, Gemini-backed) and return its answer — the agy counterpart to the codex plugin. TRIGGER when the user says "consult agy / Antigravity / Gemini", wants a second model's take on code, or asks agy to investigate/fix/research something. Slash commands: /agy:ask /agy:rescue /agy:review /agy:adversarial-review /agy:research /agy:models /agy:setup /agy:install /agy:status /agy:result /agy:cancel.
 ---
 
 # agy (Google Antigravity / Gemini) Runtime — v2

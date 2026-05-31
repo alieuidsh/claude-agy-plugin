@@ -1,6 +1,6 @@
 {
   "name": "claude-agy-plugin-runtime",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "private": true,
   "description": "Runtime dependency manifest for the agy Claude Code plugin. node-pty lets the companion drive the agy CLI through a synthesized console (ConPTY). Installed automatically on first run.",
   "dependencies": {
