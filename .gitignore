@@ -9,6 +9,12 @@ Thumbs.db
 # Local agy job state (per-machine)
 .agy-jobs/
 
+# Auto-install lock (runtime artifact)
+.agy-pty-install.lock
+
+# Auto-install lock (runtime artifact)
+.agy-pty-install.lock
+
 # Editor
 .vscode/
 .idea/

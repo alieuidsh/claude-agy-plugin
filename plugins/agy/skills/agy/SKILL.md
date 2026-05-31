@@ -39,7 +39,9 @@ Subcommands: ask, task (write), research, review (read-only), adversarial-review
 
 ## If it stops working
 
-- `setup` says `node-pty: MISSING` → run `npm install` in the plugin dir.
+- node-pty installs itself on first run (one-time `npm install` into the plugin dir).
+  If `setup` shows `node-pty: UNAVAILABLE`, the auto-install failed — ensure Node.js +
+  npm are on PATH and the network is reachable, then re-run `/agy:setup`.
 - `agy binary: NOT FOUND` → `/agy:install`, or set `AGY_BIN`.
 - no answer / auth error → run `agy` once interactively to sign in. Don't loop-retry.
 

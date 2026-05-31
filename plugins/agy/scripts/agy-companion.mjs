@@ -20,11 +20,16 @@
 
 import { spawn as cpSpawn, spawnSync, execSync } from "node:child_process";
 import {
-  existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync,
+  existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, rmdirSync,
 } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
+
+// require() resolved relative to THIS script — finds <pluginRoot>/node_modules/node-pty
+// regardless of cwd, and (unlike dynamic import) does not cache a failed first load.
+const _require = createRequire(import.meta.url);
 
 const HOME = homedir();
 const IS_WIN = platform() === "win32";
@@ -53,15 +58,49 @@ function findAgy() {
   return null;
 }
 
-// ---------- node-pty loader (graceful if missing) ----------
-// Resolve node-pty relative to this script so it works regardless of cwd.
-function loadPty() {
+// ---------- node-pty loader with one-time AUTO-INSTALL + self-heal ----------
+// Claude Code copies only the plugin dir on install (no `npm install` step), so a
+// fresh install has no node_modules. On first use we install node-pty into the
+// plugin dir ourselves — like apps that fetch their deps on first run. Concurrency
+// is guarded by an atomic mkdir lock; a stale lock (>6 min) is reclaimed.
+let _ptyCache; // undefined = unknown, null = unavailable, object = the module
+function importPtySync() { try { return _require("node-pty"); } catch { return null; } }
+function ptyInstallDir() {
+  if (process.env.CLAUDE_PLUGIN_ROOT && existsSync(process.env.CLAUDE_PLUGIN_ROOT)) return process.env.CLAUDE_PLUGIN_ROOT;
+  try { return dirname(dirname(fileURLToPath(import.meta.url))); } catch { return process.cwd(); } // scripts/ -> pluginRoot
+}
+function npmBin() { return IS_WIN ? "npm.cmd" : "npm"; }
+// Node 18+ refuses to spawn a .cmd (npm.cmd) with shell:false (EINVAL), so on Windows
+// we must use shell:true. Safe here: the command + args are fixed literals, never user
+// input. On POSIX npm is a real executable, so shell:false stays.
+function hasNpm() { try { return spawnSync(npmBin(), ["--version"], { encoding: "utf8", shell: IS_WIN, timeout: 20_000 }).status === 0; } catch { return false; } }
+function npmInstallInto(dir) {
+  process.stderr.write(`[agy] first run: installing node-pty into ${dir} (one-time; needs npm + network)...\n`);
   try {
-    const here = dirname(fileURLToPath(import.meta.url));
-    // plugin layout: scripts/ -> ../.. has node_modules after `npm install`
-    // try a few candidate locations
-    return import("node-pty").then((m) => m.default || m).catch(() => null);
-  } catch { return Promise.resolve(null); }
+    const r = spawnSync(npmBin(), ["install", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: dir, encoding: "utf8", shell: IS_WIN, timeout: 300_000 });
+    if (r.status !== 0) { process.stderr.write(`[agy] npm install failed: ${String(r.stderr || r.stdout || "").trim().slice(0, 400)}\n`); return false; }
+    process.stderr.write("[agy] node-pty installed.\n"); return true;
+  } catch (e) { process.stderr.write(`[agy] npm install error: ${e.message}\n`); return false; }
+}
+const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function ensurePty({ autoInstall = true } = {}) {
+  if (_ptyCache !== undefined) return _ptyCache;
+  let mod = importPtySync();
+  if (mod) return (_ptyCache = mod);
+  if (!autoInstall) return (_ptyCache = null);
+  const dir = ptyInstallDir();
+  if (!existsSync(join(dir, "package.json"))) { process.stderr.write(`[agy] cannot auto-install node-pty: no package.json in ${dir}\n`); return (_ptyCache = null); }
+  if (!hasNpm()) { process.stderr.write(`[agy] node-pty missing and npm not on PATH. Install Node.js, or run \`npm install\` in ${dir}\n`); return (_ptyCache = null); }
+  const lock = join(dir, ".agy-pty-install.lock");
+  try { const st = statSync(lock); if (Date.now() - st.mtimeMs > 360_000) rmdirSync(lock); } catch { /* no stale lock */ }
+  let owner = false;
+  try { mkdirSync(lock); owner = true; } catch { /* another process is installing */ }
+  if (owner) {
+    try { npmInstallInto(dir); } finally { try { rmdirSync(lock); } catch {} }
+  } else {
+    for (let i = 0; i < 150; i++) { mod = importPtySync(); if (mod) return (_ptyCache = mod); if (!existsSync(lock)) break; await _sleep(2_000); }
+  }
+  return (_ptyCache = importPtySync());
 }
 
 // ---------- clean agy's raw PTY output into a plain answer (PURE, testable) ----------
@@ -92,8 +131,8 @@ export function extractAnswer(rawOutput) {
 async function runAgy(prompt, { readOnly = false, timeoutMs = DEFAULT_TIMEOUT_MS, onSpawn } = {}) {
   const exe = findAgy();
   if (!exe) return { ok: false, error: "agy CLI not installed. Run /agy:install (asks first), or install manually: " + officialInstallCmd() };
-  const pty = await loadPty();
-  if (!pty) return { ok: false, error: "node-pty not available. Run `npm install` in the plugin dir, or `npm install node-pty`. (v2 needs a synthesized console to drive agy.)" };
+  const pty = await ensurePty();
+  if (!pty) return { ok: false, error: "node-pty unavailable and auto-install failed. Ensure Node.js/npm are installed and you have network, then run /agy:setup. (v2 needs a synthesized console to drive agy.)" };
 
   const args = [];
   if (!readOnly) args.push("--dangerously-skip-permissions");
@@ -102,7 +141,16 @@ async function runAgy(prompt, { readOnly = false, timeoutMs = DEFAULT_TIMEOUT_MS
   return await new Promise((resolve) => {
     let buf = "";
     let settled = false;
-    const done = (v) => { if (!settled) { settled = true; try { child.kill(); } catch {} resolve(v); } };
+    let timer = null;
+    // Only kill when WE need to abort (timeout). If agy already exited, killing the
+    // ConPTY triggers node-pty's console-list helper, which throws a noisy (benign)
+    // "AttachConsole failed" in headless shells. Don't kill an already-dead child.
+    const done = (v, doKill = false) => {
+      if (settled) return; settled = true;
+      if (timer) { try { clearTimeout(timer); } catch {} }
+      if (doKill) { try { child.kill(); } catch {} }
+      resolve(v);
+    };
     let child;
     try {
       child = pty.spawn(exe, args, {
@@ -120,9 +168,9 @@ async function runAgy(prompt, { readOnly = false, timeoutMs = DEFAULT_TIMEOUT_MS
       if (!answer) done({ ok: false, error: `agy produced no answer (exit ${exitCode}). If this persists, the agy CLI may have changed or needs re-auth (run \`agy\` once interactively).` });
       else done({ ok: true, answer });
     });
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       const partial = extractAnswer(buf);
-      done(partial ? { ok: true, answer: partial } : { ok: false, error: `agy timed out after ${Math.round(timeoutMs / 1000)}s.` });
+      done(partial ? { ok: true, answer: partial } : { ok: false, error: `agy timed out after ${Math.round(timeoutMs / 1000)}s.` }, true);
     }, timeoutMs);
     if (timer.unref) timer.unref();
   });
@@ -214,8 +262,9 @@ async function cmdSetup() {
   const exe = findAgy();
   console.log(`agy binary : ${exe || "NOT FOUND"}`);
   if (!exe) { console.log(notInstalledHint()); return 1; }
-  const pty = await loadPty();
-  console.log(`node-pty   : ${pty ? "OK" : "MISSING (run npm install in plugin dir)"}`);
+  console.log("node-pty   : checking (auto-installing if missing)...");
+  const pty = await ensurePty();
+  console.log(`node-pty   : ${pty ? "OK" : "UNAVAILABLE (auto-install failed; need npm + network)"}`);
   if (!pty) return 1;
   console.log("Probing agy through a synthesized console…");
   const r = await runAgy("Reply with exactly this token: AGY_READY", { readOnly: true, timeoutMs: 120_000 });
@@ -311,5 +360,10 @@ async function main() {
     default: console.error(`Unknown subcommand: ${sub || "(none)"}\nValid: ask task research review adversarial-review setup check-install install status result cancel`); code = 2;
   }
   process.exitCode = code;
+  // On Windows, node-pty/ConPTY leaves handles open after the child exits, so the event
+  // loop never drains and the process would hang until the caller's timeout. We force-exit
+  // once stdout is flushed. This also avoids node-pty's kill/console-list path, so there's
+  // no benign-but-scary "AttachConsole failed" stack on stderr. All output above is awaited.
+  process.stdout.write("", () => process.exit(code));
 }
 if (isMain) main();
