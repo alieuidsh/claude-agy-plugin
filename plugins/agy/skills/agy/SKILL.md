@@ -40,13 +40,25 @@ Subcommands: ask, task (write), research, review (read-only), adversarial-review
   analyze files, but system/terminal side-effects are blocked. Write runs use
   `--dangerously-skip-permissions` (no interactive approval is possible in print mode).
 
-## Model (not selectable)
+## Model selection
 
-agy's model is fixed by the Antigravity backend for non-interactive (`--print`) runs —
-verified: there is no `--model` flag, `~/.gemini/antigravity-cli/settings.json`'s `model`
-field is ignored in print mode (cli.log shows `model=""` → backend forces a Flash tier),
-and env vars don't override it. The settings.json `model` only affects the interactive
-GUI. So treat the model as a given; don't add a model option to these commands.
+Every command takes `--model <alias|label>`. Default is the strongest Pro
+(`Gemini 3.1 Pro (High)`). agy has no `--model` CLI flag, so the companion sets the
+model by briefly rewriting `~/.gemini/antigravity-cli/settings.json`'s `model` field,
+running, then restoring it (serialized by a lock; the user's value is always restored,
+even on error/timeout — verified). The model that actually answered is read back from
+cli.log and reported on stderr — relay it.
+
+- Aliases: `pro` / `pro-high` → Gemini 3.1 Pro (High); `flash` → Gemini 3.5 Flash (High);
+  also `pro-medium`, `pro-low`, `flash-medium`, `flash-low`, and `3.1-pro` etc.
+- You may pass ANY exact label, including a model newer than the built-in list (e.g. a
+  future `"Gemini 3.5 Pro (High)"`) — it works as soon as the backend offers it.
+- Unknown labels safely fall back to a Flash tier; the reported actual-model tells you.
+- `/agy:models` lists the known aliases + your current default.
+- Verified: setting `Gemini 3.1 Pro (High)` → backend receives exactly that (cli.log
+  `Propagating selected model ... label="Gemini 3.1 Pro (High)"`); a nonexistent label
+  falls back. (NOTE: a model's *self-report* of its own name is unreliable — trust the
+  cli.log line / the companion's reported model, not what the model says it is.)
 
 ## If it stops working
 
