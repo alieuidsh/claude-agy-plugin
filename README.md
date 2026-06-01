@@ -1,6 +1,6 @@
 # agy — Google Antigravity for Claude Code
 
-*[繁體中文](README.zh-TW.md)*
+[English](README.md) · [繁體中文](README.zh-TW.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [हिन्दी](README.hi.md) · [العربية](README.ar.md) · [Português](README.pt-BR.md) · [Русский](README.ru.md) · [日本語](README.ja.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [한국어](README.ko.md) · [Italiano](README.it.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md) · [Polski](README.pl.md) · [Nederlands](README.nl.md) · [ไทย](README.th.md) · [Українська](README.uk.md)
 
 Use the **agy CLI** (Google Antigravity) as a second model inside Claude Code — the
 `agy` counterpart to the `codex` plugin. Ask questions, get second opinions, review your

@@ -1,6 +1,6 @@
 # agy — 在 Claude Code 裡用 Google Antigravity
 
-*[English](README.md)*
+[English](README.md) · [繁體中文](README.zh-TW.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [हिन्दी](README.hi.md) · [العربية](README.ar.md) · [Português](README.pt-BR.md) · [Русский](README.ru.md) · [日本語](README.ja.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [한국어](README.ko.md) · [Italiano](README.it.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md) · [Polski](README.pl.md) · [Nederlands](README.nl.md) · [ไทย](README.th.md) · [Українська](README.uk.md)
 
 把 **agy CLI**(Google Antigravity)當成 Claude Code 裡的「第二個模型」來用 —— 它是
 `codex` plugin 的 agy 版。你可以問問題、徵詢第二意見、審查 git diff,或把任務委派給
