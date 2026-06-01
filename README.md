@@ -42,21 +42,42 @@ default, straight from Claude Code.
   first), or install manually from <https://antigravity.google>. After installing, run
   `agy` once interactively to sign in.
 
+Tested on **Windows** and **Linux** (x86_64). macOS should work (same code paths) but is
+untested. See *Platform notes* below for the Linux/SSH caveat.
+
 ---
 
 ## Install
 
+> **Don't see the `/plugin` command?** Your Claude Code is too old — `/plugin` needs a
+> recent version (2.1.143+). Update Claude Code first (Store app: update via Microsoft
+> Store / App store; CLI: `claude update`), then restart it. Being able to use a new
+> *model* like Opus 4.8 does **not** mean your app is up to date — models come from the
+> server, the `/plugin` feature comes from the app.
+
+**Step 1 — add the marketplace and install** (in Claude Code):
+
 ```bash
-# In Claude Code:
 /plugin marketplace add alieuidsh/claude-agy-plugin
 /plugin install agy@shuo-agy
 ```
 
-Then:
+**Step 2 — make the commands appear. ⚠️ This step is required, and it's where people get
+stuck.** Newly installed commands do **not** show up until you reload or restart:
+
+- Run **`/reload-plugins`**, **and**
+- if the `/agy:*` commands still don't appear (or after a plugin *update*),
+  **fully quit and reopen Claude Code** (close the window/app completely, not just the
+  tab). A reload alone sometimes isn't enough for brand-new command files.
+
+**Step 3 — health-check:**
 
 ```bash
 /agy:setup     # verifies agy + node-pty + auth; auto-installs node-pty on first run
 ```
+
+The very first `/agy:*` call takes ~15–20s (one-time node-pty install + first model-list
+scrape). That's normal — it's cached after that, later calls are fast.
 
 The first command that drives agy may take ~15–20s (one-time node-pty install + a model
 list scrape, both cached afterward).
@@ -113,6 +134,19 @@ run is killed mid-flight (the original is persisted and recovered by the next ru
 
 ---
 
+## Platform notes
+
+- **Windows / Linux** — fully tested (model switching, scrape, crash-safe restore all work).
+- **Linux + SSH gotcha**: agy stores its login in the desktop keyring when you sign in at
+  a graphical session, but switches to file-based tokens when it detects an SSH session
+  (`SSH_CONNECTION`). The two don't share state, so running the plugin **over a bare SSH
+  connection** can hit "Authentication required" even though you're logged in on the
+  desktop. Fixes: sign in *within* the SSH session, **or** run inside a `tmux`/`screen`
+  session that was started from the desktop (no `SSH_CONNECTION` in its environment) —
+  then agy reads the desktop login normally. This is an agy CLI behavior, not a plugin bug.
+
+---
+
 ## ⚠️ Privacy — read this
 
 agy sends your prompts (and, for `review`, your code diff) to **Google's servers**. Do
@@ -123,6 +157,12 @@ you can't share with a third party. Treat it like any other cloud AI service.
 
 ## Troubleshooting
 
+- **`/plugin` command not found** → your Claude Code is too old (below 2.1.143). Update
+  the app and restart it (see [Install](#install)). Being able to use a new *model* does
+  not mean the app is up to date.
+- **Installed, but the `/agy:*` commands don't show up** → run **`/reload-plugins`**; if
+  they still don't appear, **fully quit and reopen** Claude Code. New command files need a
+  reload/restart to load.
 - **`/agy:setup` says `agy binary: NOT FOUND`** → run `/agy:install`, or set the
   `AGY_BIN` environment variable to the agy executable's path.
 - **`node-pty: UNAVAILABLE`** → the one-time auto-install failed; ensure Node.js + npm
