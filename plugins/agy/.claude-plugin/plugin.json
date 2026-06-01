@@ -1,6 +1,6 @@
 {
   "name": "agy",
-  "version": "2.5.0",
-  "description": "Use Google Antigravity (Gemini) from Claude Code to review code or delegate tasks.",
-  "author": { "name": "Suho (NIU MIT Lab)" }
+  "version": "2.5.1",
+  "description": "Use Google Antigravity from Claude Code — run Gemini, Claude, or GPT-OSS as a second model to review code or delegate tasks.",
+  "author": { "name": "Shuo" }
 }

@@ -1,16 +1,16 @@
 {
-  "name": "suho-agy",
-  "owner": { "name": "Suho (NIU MIT Lab)" },
+  "name": "shuo-agy",
+  "owner": { "name": "Shuo" },
   "metadata": {
-    "description": "Use Google Antigravity (Gemini) from Claude Code to review code or delegate tasks — the agy counterpart to the codex plugin. Drives agy via a synthesized console (node-pty).",
-    "version": "2.5.0"
+    "description": "Use Google Antigravity from Claude Code — run Gemini, Claude, or GPT-OSS models as a second opinion, review your diff, or delegate tasks. The agy counterpart to the codex plugin; drives agy via a synthesized console (node-pty).",
+    "version": "2.5.1"
   },
   "plugins": [
     {
       "name": "agy",
-      "description": "Delegate tasks, get second opinions, and review code with Google Antigravity (Gemini) via the local agy CLI.",
-      "version": "2.5.0",
-      "author": { "name": "Suho (NIU MIT Lab)" },
+      "description": "Second opinions, code review, and delegated tasks via the agy CLI — pick any model agy offers (Gemini / Claude / GPT-OSS).",
+      "version": "2.5.1",
+      "author": { "name": "Shuo" },
       "source": "./plugins/agy"
     }
   ]
