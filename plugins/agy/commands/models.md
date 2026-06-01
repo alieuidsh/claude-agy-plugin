@@ -6,15 +6,19 @@ allowed-tools: Bash(node:*)
 
 !`node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" models`
 
-Show the user the available models. Key points to convey:
-- The **default** model (used when `--model` is omitted) — built-in is the strongest Pro;
-  the output's `[built-in]` / `[from env …]` tag shows where the default comes from.
-- **Change the default permanently** (no file edits, survives plugin updates): set the
-  env var `AGY_DEFAULT_MODEL` to a label or alias, e.g. `AGY_DEFAULT_MODEL=flash`, or
-  `AGY_DEFAULT_MODEL="Gemini 3.5 Pro (High)"` once it ships. On Windows persist it with
-  `setx AGY_DEFAULT_MODEL flash` (new terminals only). Per-call `--model` always wins.
-- Any command takes `--model <label-or-alias>`, e.g. `/agy:ask --model flash …` or
-  `/agy:review --model "Gemini 3.1 Pro (High)" …`.
-- You can pass ANY exact label, including a model newer than this list (it works as
-  soon as the backend offers it). Unknown labels fall back to a Flash tier, and every
-  run reports the model actually used.
+This lists ALL models the account can use (Gemini + Claude + GPT-OSS), scraped live from
+agy's `/model` menu and cached (re-scraped when agy updates or after 7 days; `--refresh`
+forces it). Key points to convey:
+- The **default** model (used when `--model` is omitted): the `[built-in]` /
+  `[set via /agy:model]` tag shows where it comes from.
+- **Change the default**: `/agy:model <alias|label>` (e.g. `/agy:model flash`) — saved to
+  the plugin config, takes effect immediately, persists across sessions, no restart.
+  `/agy:model` with no argument shows the current default. (`/agy:model` = the single
+  current model; `/agy:models` = this full list.)
+- **Per-call** override: any command takes `--model <alias|label>`, e.g.
+  `/agy:ask --model flash …` or `/agy:ask --model "Claude Opus 4.6 (Thinking)" …`.
+  Aliases (`pro`/`flash` + tiers) are Gemini-only; Claude/GPT-OSS need the full label.
+- You can pass ANY exact label, including a model newer than the list (works as soon as
+  the backend offers it). Unknown labels fall back to a Flash tier; every run reports the
+  model actually used.
+- If the list looks stale after an agy update, run `/agy:models --refresh` or `/agy:update`.

@@ -1,6 +1,6 @@
 ---
 name: agy
-description: Delegate a coding task, second opinion, research, or deep investigation to Google Antigravity (the `agy` CLI, Gemini-backed) and return its answer — the agy counterpart to the codex plugin. TRIGGER when the user says "consult agy / Antigravity / Gemini", wants a second model's take on code, or asks agy to investigate/fix/research something. Slash commands: /agy:ask /agy:rescue /agy:review /agy:adversarial-review /agy:research /agy:models /agy:setup /agy:install /agy:status /agy:result /agy:cancel.
+description: Delegate a coding task, second opinion, research, or deep investigation to Google Antigravity (the `agy` CLI — can run Gemini, Claude, or GPT-OSS) and return its answer — the agy counterpart to the codex plugin. TRIGGER when the user says "consult agy / Antigravity / Gemini", wants a second model's take on code, or asks agy to investigate/fix/research something. Slash commands: /agy:ask /agy:rescue /agy:review /agy:adversarial-review /agy:research /agy:model /agy:models /agy:update /agy:setup /agy:install /agy:status /agy:result /agy:cancel.
 ---
 
 # agy (Google Antigravity / Gemini) Runtime — v2
@@ -42,28 +42,33 @@ Subcommands: ask, task (write), research, review (read-only), adversarial-review
 
 ## Model selection
 
-Every command takes `--model <alias|label>`. Default is the strongest Pro
-(`Gemini 3.1 Pro (High)`), overridable via env `AGY_DEFAULT_MODEL` (see below). agy has
-no `--model` CLI flag, so the companion sets the model by briefly rewriting
+agy can run **Gemini, Claude, and GPT-OSS** models (verified by scraping its `/model`
+menu). agy has no `--model` CLI flag, so the companion picks a model by briefly rewriting
 `~/.gemini/antigravity-cli/settings.json`'s `model` field, running, then restoring it
-(serialized by a lock; the user's value is always restored, even on error/timeout —
-verified). The model that actually answered is read back from cli.log and reported on
-stderr — relay it.
+(serialized by a lock; the user's value is always restored, even on error/timeout). The
+model that actually answered is read back from cli.log and reported on stderr — relay it.
 
-- **Default override**: env `AGY_DEFAULT_MODEL` (alias or label) changes the default
-  with no file edits and survives plugin updates; per-call `--model` still wins. If a
-  user asks to "always use X" or "change the default model", point them to this env var
-  (`setx AGY_DEFAULT_MODEL …` on Windows) rather than editing the script.
-- Aliases: `pro` / `pro-high` → Gemini 3.1 Pro (High); `flash` → Gemini 3.5 Flash (High);
-  also `pro-medium`, `pro-low`, `flash-medium`, `flash-low`, and `3.1-pro` etc.
-- You may pass ANY exact label, including a model newer than the built-in list (e.g. a
-  future `"Gemini 3.5 Pro (High)"`) — it works as soon as the backend offers it.
-- Unknown labels safely fall back to a Flash tier; the reported actual-model tells you.
-- `/agy:models` lists the known aliases + your current default.
-- Verified: setting `Gemini 3.1 Pro (High)` → backend receives exactly that (cli.log
-  `Propagating selected model ... label="Gemini 3.1 Pro (High)"`); a nonexistent label
-  falls back. (NOTE: a model's *self-report* of its own name is unreliable — trust the
-  cli.log line / the companion's reported model, not what the model says it is.)
+Three model commands:
+- **`/agy:models`** (plural) — lists ALL models the account can use, scraped live from the
+  `/model` menu and cached (re-scraped when agy updates, after 7 days, or with `--refresh`).
+- **`/agy:model`** (singular) — shows the current default; `/agy:model <name>` sets it.
+  Saved to the plugin config (`~/.agy-jobs/config.json`): immediate, persists across
+  sessions, no restart. This is the right answer when a user says "always use X" or
+  "change the default model" — do NOT tell them to edit the script or set env vars.
+- **`--model <name>`** on any run command (ask/research/rescue/review/adversarial) —
+  one-off override; always wins over the default.
+
+Names:
+- Aliases are **Gemini-only**: `pro`/`pro-high` → newest Gemini Pro (High), `flash` →
+  newest Gemini Flash (High), plus `pro-low`, `flash-medium`, `flash-low`. They resolve
+  against the live list, so when a newer Gemini ships, `pro`/`flash` track it.
+- Claude / GPT-OSS need the **full label**, e.g. `"Claude Opus 4.6 (Thinking)"`,
+  `"GPT-OSS 120B (Medium)"` — get exact strings from `/agy:models`.
+- Any exact label passes through, including one newer than the cached list. Unknown
+  labels fall back to a Flash tier; the reported actual-model tells you what ran.
+- Default when nothing is set: `Gemini 3.1 Pro (High)` (strongest Pro now).
+- (NOTE: a model's *self-report* of its own name is unreliable — trust the cli.log line /
+  the companion's reported model, not what the model says it is.)
 
 ## If it stops working
 

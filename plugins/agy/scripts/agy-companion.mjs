@@ -21,6 +21,7 @@
 import { spawn as cpSpawn, spawnSync, execSync } from "node:child_process";
 import {
   existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, rmdirSync,
+  renameSync,
 } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
@@ -44,21 +45,26 @@ const JOB_ID_RE = /^\d{8}_\d{6}_\d{4}$/;
 // (verified: setting "Gemini 3.1 Pro (High)" → backend receives exactly that; an
 // unknown label falls back to Flash). So to pick a model per-call we briefly rewrite
 // settings.json, run, then restore it (serialized by a lock; see withModel()).
-const BUILTIN_DEFAULT_MODEL = "Gemini 3.1 Pro (High)"; // strongest Pro available now
-// You can override the default WITHOUT editing this file: set env var AGY_DEFAULT_MODEL
-// to a label or alias (e.g. AGY_DEFAULT_MODEL="flash", or "Gemini 3.5 Pro (High)" once
-// it ships). Per-call --model always wins over this. Survives plugin updates.
-const KNOWN_MODELS = [
-  // Verified to exist: 3.1 Pro (High), 3.5 Flash (High/Medium). Others are the
-  // expected tiers; an unsupported one safely falls back (and we report the actual
-  // model used). New models (e.g. a future "Gemini 3.5 Pro (High)") work too — just
-  // pass the full label to --model; you don't have to wait for this list to update.
-  { label: "Gemini 3.1 Pro (High)", aliases: ["pro", "pro-high", "3.1-pro", "3.1-pro-high"] },
-  { label: "Gemini 3.1 Pro (Medium)", aliases: ["pro-medium", "3.1-pro-medium"] },
-  { label: "Gemini 3.1 Pro (Low)", aliases: ["pro-low", "3.1-pro-low"] },
-  { label: "Gemini 3.5 Flash (High)", aliases: ["flash", "flash-high", "3.5-flash", "3.5-flash-high"] },
-  { label: "Gemini 3.5 Flash (Medium)", aliases: ["flash-medium", "3.5-flash-medium"] },
-  { label: "Gemini 3.5 Flash (Low)", aliases: ["flash-low", "3.5-flash-low"] },
+const BUILTIN_DEFAULT_MODEL = "Gemini 3.1 Pro (High)"; // strongest Pro, used if no user default set
+// The default model is stored in the plugin's own config file (~/.agy-jobs/config.json),
+// set via `/agy:model <name>` — takes effect immediately, persists across sessions, no
+// terminal restart, survives plugin updates. Per-call `--model` always wins over it.
+// Short aliases — GEMINI ONLY (per design). Claude/GPT-OSS models are real and appear
+// in /agy:models, but must be passed by full label (cross-vendor behavior differs too
+// much to alias casually). "pro"/"flash" intentionally map to whatever Gemini Pro/Flash
+// label currently exists, resolved against the live model list at call time (so when
+// 3.5 Pro ships, "pro" picks it up). The static map here is the fallback ordering.
+// Each alias has `match` (against the live list, so it tracks the newest Gemini) AND a
+// concrete `fallback` label used when the live list is unavailable (offline / first run /
+// scrape failed). Every documented alias MUST have a fallback so it never degrades to a
+// raw alias string (which the backend would silently fall back to Flash).
+const GEMINI_ALIASES = [
+  { aliases: ["pro", "pro-high"], match: /^Gemini .*Pro \(High\)$/i, fallback: "Gemini 3.1 Pro (High)" },
+  { aliases: ["pro-low"], match: /^Gemini .*Pro \(Low\)$/i, fallback: "Gemini 3.1 Pro (Low)" },
+  { aliases: ["pro-medium"], match: /^Gemini .*Pro \(Medium\)$/i, fallback: "Gemini 3.1 Pro (Medium)" },
+  { aliases: ["flash", "flash-high"], match: /^Gemini .*Flash \(High\)$/i, fallback: "Gemini 3.5 Flash (High)" },
+  { aliases: ["flash-medium"], match: /^Gemini .*Flash \(Medium\)$/i, fallback: "Gemini 3.5 Flash (Medium)" },
+  { aliases: ["flash-low"], match: /^Gemini .*Flash \(Low\)$/i, fallback: "Gemini 3.5 Flash (Low)" },
 ];
 function agyDir() { return join(HOME, ".gemini", "antigravity-cli"); }
 function settingsFile() {
@@ -66,20 +72,137 @@ function settingsFile() {
   const p = join(agyDir(), "settings.json");
   return existsSync(p) ? p : null;
 }
-// Map an alias to its full label; pass through anything not in the table.
+// Map an alias to a full label. Gemini aliases resolve against the live model list
+// (cached scrape) so "pro" tracks the newest Gemini Pro tier; anything else passes
+// through unchanged (full labels, including Claude/GPT-OSS, and future models).
 function aliasToLabel(s) {
-  const low = String(s).trim().toLowerCase();
-  for (const m of KNOWN_MODELS) {
-    if (m.label.toLowerCase() === low || m.aliases.includes(low)) return m.label;
+  const raw = String(s).trim();
+  const low = raw.toLowerCase();
+  const rule = GEMINI_ALIASES.find((r) => r.aliases.includes(low));
+  if (rule) {
+    const live = cachedModelList();          // [] if unavailable
+    const hit = live.find((m) => rule.match.test(m));
+    if (hit) return hit;                      // newest live match (tracks new Gemini)
+    return rule.fallback;                     // no live list → concrete label for THIS tier
   }
-  return String(s).trim();
+  return raw; // full label / unknown — pass through (backend falls back if invalid)
 }
-// The effective default: env AGY_DEFAULT_MODEL (alias or label) if set, else builtin.
+// ---------- plugin config (~/.agy-jobs/config.json): stores the user's default model ----
+function configFile() { return join(JOBS, "config.json"); }
+function readConfig() { try { return JSON.parse(readFileSync(configFile(), "utf8")) || {}; } catch { return {}; } }
+function writeConfig(obj) { try { ensureJobs(); writeFileSync(configFile(), JSON.stringify(obj, null, 2), "utf8"); return true; } catch { return false; } }
+// The effective default: the user's saved default (resolved through aliases), else builtin.
 function defaultModel() {
-  const env = process.env.AGY_DEFAULT_MODEL;
-  if (env && String(env).trim()) return aliasToLabel(env);
+  const saved = readConfig().defaultModel;
+  if (saved && String(saved).trim()) return aliasToLabel(saved);
   return BUILTIN_DEFAULT_MODEL;
 }
+// ---------- live model list (scrape agy's interactive /model menu, cached) ----------
+// agy has no CLI to print its model list, but the interactive `/model` menu lists every
+// model the account can use (Gemini + Claude + GPT-OSS). We drive agy in a ConPTY, send
+// /model, scrape the menu, then quit. Cached to ~/.agy-jobs/models-cache.json, keyed on
+// agy version + exe fingerprint; re-scraped when those change or the cache is >7 days old.
+const MODELS_CACHE = () => join(JOBS, "models-cache.json");
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function agyVersion() {
+  try {
+    const exe = findAgy(); if (!exe) return null;
+    const r = spawnSync(exe, ["--version"], { encoding: "utf8", timeout: 15_000 });
+    const out = String(r.stdout || "").trim();
+    const m = out.match(/\d+\.\d+\.\d+/);
+    return m ? m[0] : (out || null);
+  } catch { return null; }
+}
+// Fingerprint = exe size + mtime ONLY (no agyVersion). agy --version can be slow/null
+// offline, which would change the fingerprint and force a re-scrape (then a 30s timeout)
+// on every offline call. size+mtime already changes whenever the binary updates, and is
+// instant + offline-safe.
+function agyFingerprint() {
+  const exe = findAgy(); if (!exe) return null;
+  try { const st = statSync(exe); return `${st.size}|${Math.round(st.mtimeMs)}`; }
+  catch { return null; }
+}
+function readModelsCache() {
+  try { return JSON.parse(readFileSync(MODELS_CACHE(), "utf8")); } catch { return null; }
+}
+// Synchronous best-effort list for alias resolution (no scrape here — just the cache).
+function cachedModelList() {
+  const c = readModelsCache();
+  return c && Array.isArray(c.models) ? c.models : [];
+}
+// POSITIVE extraction: match from the vendor word up to the first tier paren, so any
+// trailing status-bar / cursor text (even separated by a single space) is dropped
+// instead of contaminating or invalidating the label. `.*?` is lazy so it stops at the
+// FIRST "(tier)" — robust to "(current)" and one-space status bleed (3-way review #6).
+function parseModelMenu(rawClean) {
+  const out = [];
+  const re = /(?:Gemini|Claude|GPT-OSS|GPT|GLM|Llama|Mistral|Qwen|DeepSeek)\b.*?\((?:High|Medium|Low|Thinking|Standard)\)/i;
+  for (const line of rawClean.split("\n")) {
+    const m = line.replace(/\r/g, "").match(re);
+    if (m && m[0].length < 60) out.push(m[0].trim());
+  }
+  return [...new Set(out)];
+}
+// Drive interactive agy, scrape /model. Returns array of labels (possibly empty).
+async function scrapeModelList({ timeoutMs = 30_000 } = {}) {
+  const exe = findAgy(); if (!exe) return [];
+  const pty = await ensurePty(); if (!pty) return [];
+  // Pick an already-trusted workspace so the trust prompt is skipped.
+  let cwd = IS_WIN ? (process.env.TEMP || HOME) : HOME;
+  try {
+    const sf = settingsFile();
+    if (sf) { const tw = JSON.parse(readFileSync(sf, "utf8")).trustedWorkspaces; if (Array.isArray(tw) && tw[0] && existsSync(tw[0])) cwd = tw[0]; }
+  } catch {}
+  return await new Promise((resolve) => {
+    let buf = "", settled = false, sentModel = false, sawMenu = false, resolved = false;
+    const child = pty.spawn(exe, [], { name: "xterm-256color", cols: 120, rows: 50, cwd, env: process.env });
+    const pid = child.pid;
+    const strip = (s) => cleanOutput(s);
+    const giveResult = () => { if (resolved) return; resolved = true; resolve(parseModelMenu(strip(buf))); };
+    // Resolve with the parsed list, then quit agy. We kill the OS process tree directly
+    // (taskkill / SIGKILL) instead of child.kill(), because node-pty's kill path spawns a
+    // console-list helper that throws a noisy "AttachConsole failed" in a headless shell.
+    const fin = () => {
+      if (settled) return; settled = true;
+      giveResult();
+      try { child.write("\x1b"); child.write("/quit\r"); } catch {} // ask agy to exit cleanly
+      setTimeout(() => {
+        if (!pid) return;
+        try { if (IS_WIN) execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" }); else process.kill(pid, "SIGKILL"); } catch {}
+      }, 300);
+    };
+    child.onData((d) => {
+      buf += d;
+      const c = strip(buf);
+      if (!sentModel && /trust (this|the contents)/i.test(c) && /Yes, I trust/i.test(c)) { try { child.write("\r"); } catch {} }
+      if (!sentModel && /\? for shortcuts/.test(c)) { sentModel = true; setTimeout(() => { try { child.write("/model\r"); } catch {} }, 800); }
+      if (sentModel && /Switch Model/i.test(c) && !sawMenu) { sawMenu = true; setTimeout(fin, 1500); } // menu rendered — grab & go
+    });
+    child.onExit(() => { giveResult(); settled = true; });
+    const t = setTimeout(fin, timeoutMs); if (t.unref) t.unref();
+  });
+}
+// Get the model list, using cache unless stale/forced. force=true always re-scrapes.
+async function getModelList({ force = false } = {}) {
+  const fp = agyFingerprint();
+  const cache = readModelsCache();
+  const fresh = cache && cache.fingerprint === fp && Array.isArray(cache.models) && cache.models.length &&
+    cache.scrapedAt && (nowMs() - Date.parse(cache.scrapedAt) < CACHE_TTL_MS);
+  if (!force && fresh) return { models: cache.models, cached: true, version: cache.version || null };
+  const models = await scrapeModelList();
+  if (models.length) {
+    try { ensureJobs(); writeFileSync(MODELS_CACHE(), JSON.stringify({ fingerprint: fp, version: agyVersion(), models, scrapedAt: isoNow() }, null, 2), "utf8"); } catch {}
+    return { models, cached: false, version: agyVersion() };
+  }
+  // Scrape failed — fall back to stale cache if we have one.
+  if (cache && Array.isArray(cache.models) && cache.models.length) return { models: cache.models, cached: true, stale: true, version: cache.version || null };
+  return { models: [], cached: false, version: agyVersion() };
+}
+// nowMs/isoNow isolated so the no-Date-in-workflows rule is irrelevant here (plain CLI).
+function nowMs() { return Date.now(); }
+function isoNow() { return new Date().toISOString(); }
+
 // Resolve an alias / full label / undefined into a concrete label.
 function resolveModel(input) {
   if (!input || !String(input).trim()) return defaultModel();
@@ -187,34 +310,108 @@ export function extractAnswer(rawOutput) {
   return clean;
 }
 
-// Run fn() with settings.json's model temporarily set to targetLabel, then restore
-// the original. A mkdir lock serializes concurrent model-scoped runs so two jobs with
-// different models can't clash; the finally always restores (even on throw/timeout).
+// Exported for unit tests (parseModelMenu is internal but testable via this alias).
+export const __parseModelMenu = (s) => parseModelMenu(s);
+
+// Atomic JSON write: write to a temp file then rename, so a crash mid-write can't leave
+// the file half-written. The WHOLE operation is guarded, and the temp file is always
+// cleaned up on any failure (no .tmp litter).
+function writeJsonAtomic(file, obj) {
+  const tmp = `${file}.tmp.${process.pid}.${Math.floor(Math.random() * 1e6)}`;
+  try {
+    writeFileSync(tmp, JSON.stringify(obj, null, 2), "utf8");
+    renameSync(tmp, file);
+  } catch (e) { try { unlinkSync(tmp); } catch {}; throw e; }
+}
+// Set settings.json's "model" key (or delete it if value===undefined), atomically,
+// preserving the rest of the file. Returns true on success, false on failure.
+function setSettingsModel(sf, value) {
+  try {
+    let cur; try { cur = JSON.parse(readFileSync(sf, "utf8")); } catch { cur = {}; }
+    if (!cur || typeof cur !== "object") cur = {};
+    if (value === undefined) delete cur.model; else cur.model = value;
+    writeJsonAtomic(sf, cur);
+    return true;
+  } catch { return false; }
+}
+
+// Run fn() with settings.json's "model" temporarily set to targetLabel, then restore the
+// ORIGINAL. CRASH-SAFE design (from two rounds of 3-way review):
+//  - All settings.json reads/writes happen ONLY while holding the lock (no concurrent
+//    job can ever snapshot another's temporary value as "original").
+//  - Before changing settings.json we PERSIST the original into the lock dir
+//    (restore.json). So if this process is killed mid-run, the next run that finds the
+//    (now stale) lock RESTORES the user's real model from restore.json before evicting
+//    the lock — settings.json is never left pinned to a temporary model.
+//  - If we can't get the lock, we DON'T touch settings.json (run degraded, never corrupt).
+//  - If a write fails, we degrade (run with current model) instead of crashing.
+//  - If RESTORE fails, we DON'T release the lock and we report it — the durable
+//    restore.json lets a later run recover, rather than silently leaving a wrong model.
+//  - Heartbeat refreshes a FILE inside the lock dir (not the dir mtime, which utimesSync
+//    can't reliably touch on Windows); stale detection reads that file's mtime.
+const MODEL_LOCK_STALE_MS = 30 * 60 * 1000;
+function lockBeatFile(lock) { return join(lock, "beat"); }
+function lockRestoreFile(lock) { return join(lock, "restore.json"); }
+function lockFreshMs(lock) {
+  // Most-recent of the beat file and the lock dir itself.
+  let t = 0;
+  try { t = Math.max(t, statSync(lockBeatFile(lock)).mtimeMs); } catch {}
+  try { t = Math.max(t, statSync(lock).mtimeMs); } catch {}
+  return t;
+}
+// If `lock` holds a restore.json (a crashed owner left it), put the user's real model
+// back BEFORE we reuse the lock. Best-effort: only proceeds if we can read the snapshot.
+function recoverFromStaleLock(sf, lock) {
+  try {
+    const snap = JSON.parse(readFileSync(lockRestoreFile(lock), "utf8"));
+    if (snap && snap.changed) setSettingsModel(sf, snap.original); // original may be undefined → delete
+  } catch { /* no/unreadable snapshot — nothing to recover */ }
+}
 async function withModel(targetLabel, fn) {
   const sf = settingsFile();
   if (!sf) return await fn(); // no settings file — use agy's current default
-  let obj;
-  try { obj = JSON.parse(readFileSync(sf, "utf8")); } catch { return await fn(); }
-  const original = Object.prototype.hasOwnProperty.call(obj, "model") ? obj.model : undefined;
-  if (original === targetLabel) return await fn(); // already the target; nothing to do
   const lock = join(agyDir(), ".agy-model.lock");
   let locked = false;
-  for (let i = 0; i < 300; i++) {
-    try { const st = statSync(lock); if (Date.now() - st.mtimeMs > 360_000) rmdirSync(lock); } catch {}
+  for (let i = 0; i < 600; i++) { // up to ~10 min waiting for a busy lock
+    try { if (Date.now() - lockFreshMs(lock) > MODEL_LOCK_STALE_MS) { recoverFromStaleLock(sf, lock); try { unlinkSync(lockBeatFile(lock)); } catch {} try { unlinkSync(lockRestoreFile(lock)); } catch {} rmdirSync(lock); } } catch {}
     try { mkdirSync(lock); locked = true; break; } catch { await _sleep(1000); }
   }
+  if (!locked) {
+    process.stderr.write("[agy] note: could not lock settings.json; running with the current model (another agy job is active).\n");
+    return await fn();
+  }
+  const beat = () => { try { writeFileSync(lockBeatFile(lock), String(Date.now()), "utf8"); } catch {} };
+  beat();
+  const heartbeat = setInterval(beat, 60_000);
+  if (heartbeat.unref) heartbeat.unref();
+  let original;
+  let changed = false;
   try {
-    const cur = JSON.parse(readFileSync(sf, "utf8"));
-    cur.model = targetLabel;
-    writeFileSync(sf, JSON.stringify(cur, null, 2), "utf8");
+    let cur; try { cur = JSON.parse(readFileSync(sf, "utf8")); } catch { cur = null; }
+    if (cur && typeof cur === "object") {
+      original = Object.prototype.hasOwnProperty.call(cur, "model") ? cur.model : undefined;
+      if (original !== targetLabel) {
+        // Persist the restore snapshot BEFORE changing settings (durable across a crash).
+        try { writeJsonAtomic(lockRestoreFile(lock), { original, changed: true }); } catch {}
+        if (setSettingsModel(sf, targetLabel)) changed = true;
+        else process.stderr.write("[agy] note: could not write settings.json; running with the current model.\n");
+      }
+    }
     return await fn();
   } finally {
-    try {
-      const cur = JSON.parse(readFileSync(sf, "utf8"));
-      if (original === undefined) delete cur.model; else cur.model = original;
-      writeFileSync(sf, JSON.stringify(cur, null, 2), "utf8");
-    } catch {}
-    if (locked) { try { rmdirSync(lock); } catch {} }
+    clearInterval(heartbeat);
+    let restored = true;
+    if (changed) {
+      restored = setSettingsModel(sf, original);
+      if (!restored) process.stderr.write("[agy] WARNING: failed to restore your settings.json model; it may be left on \"" + targetLabel + "\". Re-run /agy:model to reset, or check ~/.gemini/antigravity-cli/settings.json.\n");
+    }
+    if (restored) {
+      // Clean shutdown: drop the snapshot + lock.
+      try { unlinkSync(lockBeatFile(lock)); } catch {}
+      try { unlinkSync(lockRestoreFile(lock)); } catch {}
+      try { rmdirSync(lock); } catch {}
+    }
+    // If NOT restored: deliberately keep the lock + restore.json so a later run recovers.
   }
 }
 
@@ -372,23 +569,90 @@ async function cmdSetup() {
   if (r.ok) { console.log(`RESULT: agy answered unexpectedly: ${r.answer.slice(0, 120)}`); return 0; }
   console.log(`RESULT: ${r.error}`); return 1;
 }
-function cmdModels() {
-  const sf = settingsFile();
-  let curModel = null; try { if (sf) curModel = JSON.parse(readFileSync(sf, "utf8")).model; } catch {}
-  const envSet = process.env.AGY_DEFAULT_MODEL && String(process.env.AGY_DEFAULT_MODEL).trim();
-  const src = envSet ? `from env AGY_DEFAULT_MODEL="${process.env.AGY_DEFAULT_MODEL}"` : "built-in";
+function aliasHintFor(label) {
+  const r = GEMINI_ALIASES.find((g) => g.match.test(label));
+  return r ? `  (alias: ${r.aliases.join(", ")})` : "";
+}
+async function cmdModels({ refresh = false } = {}) {
+  const saved = readConfig().defaultModel;
+  const src = saved ? "set via /agy:model" : "built-in";
   console.log(`Default model (used when --model is omitted): ${defaultModel()}  [${src}]`);
-  console.log(`Your settings.json model (interactive default): ${curModel || "(unset)"}`);
   console.log("");
-  console.log("Known models (pass the label or any alias to --model):");
-  for (const m of KNOWN_MODELS) console.log(`  ${m.label.padEnd(26)} aliases: ${m.aliases.join(", ")}`);
+
+  // Live list, cached on agy version+fingerprint (re-scraped on change or >7 days).
+  const cacheBefore = readModelsCache();
+  if (!refresh && !(cacheBefore && cacheBefore.fingerprint === agyFingerprint() && Array.isArray(cacheBefore.models) && cacheBefore.models.length)) {
+    process.stderr.write("[agy] scraping the live /model list (one-time, ~15-20s; cached after)…\n");
+  } else if (refresh) {
+    process.stderr.write("[agy] --refresh: re-scraping the live /model list…\n");
+  }
+  const { models, cached, stale, version } = await getModelList({ force: refresh });
+
+  if (models.length) {
+    console.log(`Available models for your account${version ? ` (agy ${version})` : ""}${cached ? (stale ? " [cached, stale]" : " [cached]") : " [freshly scraped]"}:`);
+    for (const m of models) console.log(`  ${m}${aliasHintFor(m)}`);
+  } else {
+    console.log("Available models: (could not read the live list — using fallbacks)");
+    console.log("  Gemini 3.1 Pro (High)   (alias: pro, pro-high)");
+    console.log("  Gemini 3.5 Flash (High) (alias: flash, flash-high)");
+    console.log("  Tip: run `/agy:models --refresh`, or `agy` once interactively to sign in.");
+  }
   console.log("");
-  console.log("Change the DEFAULT permanently (no file edits, survives updates): set env");
-  console.log("  AGY_DEFAULT_MODEL  to a label or alias, e.g.  AGY_DEFAULT_MODEL=flash");
-  console.log("  or  AGY_DEFAULT_MODEL=\"Gemini 3.5 Pro (High)\"  (once it ships).");
-  console.log("You can also pass ANY exact label to --model per call — it works as soon as");
-  console.log("the backend offers it. Unknown labels fall back to Flash; each run reports the");
-  console.log("model actually used.");
+  console.log("Pick per call with --model <alias|full label>, e.g.:");
+  console.log("  /agy:ask --model flash …                       (Gemini alias)");
+  console.log("  /agy:ask --model \"Claude Opus 4.6 (Thinking)\" …  (full label for non-Gemini)");
+  console.log("Aliases are Gemini-only (pro/flash + tiers); Claude/GPT-OSS need the full label.");
+  console.log("");
+  console.log("Set the DEFAULT permanently:  /agy:model <alias|label>");
+  console.log("  e.g.  /agy:model flash   or   /agy:model \"Claude Opus 4.6 (Thinking)\"");
+  console.log("See/refresh: `/agy:model` shows the current default; `/agy:models --refresh`");
+  console.log("re-scrapes this list (also auto-re-scrapes when agy updates — see /agy:update).");
+  return 0;
+}
+// /agy:model           -> show the current default
+// /agy:model <name>    -> set the default (saved to plugin config, persistent)
+function cmdModel(arg) {
+  if (!arg || !String(arg).trim()) {
+    const saved = readConfig().defaultModel;
+    console.log(`Current default model: ${defaultModel()}  [${saved ? "set via /agy:model" : "built-in"}]`);
+    console.log("Change it:  /agy:model <alias|label>   e.g.  /agy:model flash");
+    console.log("See all options:  /agy:models");
+    return 0;
+  }
+  const requested = String(arg).trim();
+  const resolved = aliasToLabel(requested);
+  const cfg = readConfig();
+  cfg.defaultModel = requested; // store as given (alias stays dynamic; label stays exact)
+  if (!writeConfig(cfg)) { console.error("Failed to save default model to plugin config."); return 1; }
+  console.log(`Default model set to: ${resolved}`);
+  if (resolved !== requested) console.log(`  (alias "${requested}" → ${resolved}; tracks the live list)`);
+  // Gentle nudge if it's not in the known live list (might be a typo / not yet released).
+  const live = cachedModelList();
+  if (live.length && !live.includes(resolved) && !GEMINI_ALIASES.some((g) => g.aliases.includes(requested.toLowerCase()))) {
+    console.log(`  Note: "${resolved}" isn't in your current model list (/agy:models). It will`);
+    console.log(`  fall back to a Flash tier until available. Each run reports the model used.`);
+  }
+  console.log("Takes effect immediately; per-call --model still overrides it.");
+  return 0;
+}
+async function cmdUpdate() {
+  const exe = findAgy();
+  if (!exe) { console.log(notInstalledHint()); return 1; }
+  const before = agyVersion();
+  console.log(`Updating agy (current: ${before || "?"})… running \`agy update\`.`);
+  try {
+    const r = spawnSync(exe, ["update"], { encoding: "utf8", timeout: 300_000, stdio: "inherit" });
+    if (r.status !== 0 && r.status != null) console.log(`(agy update exited ${r.status})`);
+  } catch (e) { console.log(`agy update failed: ${e.message}`); return 1; }
+  const after = agyVersion();
+  console.log(`\nagy version: ${before || "?"} -> ${after || "?"}`);
+  if (after && before && after !== before) {
+    // Version changed → invalidate the model cache so /agy:models re-scrapes next time.
+    try { if (existsSync(MODELS_CACHE())) unlinkSync(MODELS_CACHE()); } catch {}
+    console.log("Model list cache cleared; /agy:models will re-scrape on next run.");
+  } else {
+    console.log("No version change (or unknown). Use `/agy:models --refresh` to force a re-scrape.");
+  }
   return 0;
 }
 function cmdStatus() {
@@ -444,12 +708,13 @@ function cmdCancel(rawId) {
 
 // ---------- arg parsing ----------
 function parseFlags(rest) {
-  const out = { writeOverride: null, yes: false, timeoutMs: DEFAULT_TIMEOUT_MS, model: undefined };
+  const out = { writeOverride: null, yes: false, timeoutMs: DEFAULT_TIMEOUT_MS, model: undefined, refresh: false };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === "--write") out.writeOverride = true;
     else if (a === "--read-only" || a === "--readonly") out.writeOverride = false;
     else if (a === "--yes" || a === "-y") out.yes = true;
+    else if (a === "--refresh") out.refresh = true;
     else if (a === "--timeout" && rest[i + 1]) { const s = parseInt(rest[++i], 10); if (Number.isFinite(s) && s > 0) out.timeoutMs = Math.min(Math.max(s * 1000, MIN_TIMEOUT_MS), MAX_TIMEOUT_MS); }
     else if (a === "--model" && rest[i + 1]) { out.model = rest[++i]; }
   }
@@ -472,13 +737,15 @@ async function main() {
     case "review": { const { diff } = collectDiff(); code = await runJob("review", reviewPrompt(stdin, diff, false), { readOnly: true, timeoutMs: f.timeoutMs, model: f.model }); break; }
     case "adversarial-review": { const { diff } = collectDiff(); code = await runJob("adversarial-review", reviewPrompt(stdin, diff, true), { readOnly: true, timeoutMs: f.timeoutMs, model: f.model }); break; }
     case "setup": code = await cmdSetup(); break;
-    case "models": code = cmdModels(); break;
+    case "model": { const a = f.model || rest.filter((x) => !x.startsWith("--")).join(" ").trim(); code = cmdModel(a); break; }
+    case "models": code = await cmdModels({ refresh: f.refresh }); break;
+    case "update": code = await cmdUpdate(); break;
     case "check-install": code = cmdCheckInstall(); break;
     case "install": code = await cmdInstall(f.yes); break;
     case "status": code = cmdStatus(); break;
     case "result": code = cmdResult(rest[0]); break;
     case "cancel": code = cmdCancel(rest[0]); break;
-    default: console.error(`Unknown subcommand: ${sub || "(none)"}\nValid: ask task research review adversarial-review setup models check-install install status result cancel`); code = 2;
+    default: console.error(`Unknown subcommand: ${sub || "(none)"}\nValid: ask task research review adversarial-review setup models update check-install install status result cancel`); code = 2;
   }
   process.exitCode = code;
   // On Windows, node-pty/ConPTY leaves handles open after the child exits, so the event
