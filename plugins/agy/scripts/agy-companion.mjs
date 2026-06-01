@@ -44,7 +44,10 @@ const JOB_ID_RE = /^\d{8}_\d{6}_\d{4}$/;
 // (verified: setting "Gemini 3.1 Pro (High)" → backend receives exactly that; an
 // unknown label falls back to Flash). So to pick a model per-call we briefly rewrite
 // settings.json, run, then restore it (serialized by a lock; see withModel()).
-const DEFAULT_MODEL = "Gemini 3.1 Pro (High)"; // strongest Pro available now
+const BUILTIN_DEFAULT_MODEL = "Gemini 3.1 Pro (High)"; // strongest Pro available now
+// You can override the default WITHOUT editing this file: set env var AGY_DEFAULT_MODEL
+// to a label or alias (e.g. AGY_DEFAULT_MODEL="flash", or "Gemini 3.5 Pro (High)" once
+// it ships). Per-call --model always wins over this. Survives plugin updates.
 const KNOWN_MODELS = [
   // Verified to exist: 3.1 Pro (High), 3.5 Flash (High/Medium). Others are the
   // expected tiers; an unsupported one safely falls back (and we report the actual
@@ -63,16 +66,24 @@ function settingsFile() {
   const p = join(agyDir(), "settings.json");
   return existsSync(p) ? p : null;
 }
-// Resolve an alias / full label / undefined into a concrete label.
-function resolveModel(input) {
-  if (!input) return DEFAULT_MODEL;
-  const s = String(input).trim();
-  if (!s) return DEFAULT_MODEL;
-  const low = s.toLowerCase();
+// Map an alias to its full label; pass through anything not in the table.
+function aliasToLabel(s) {
+  const low = String(s).trim().toLowerCase();
   for (const m of KNOWN_MODELS) {
     if (m.label.toLowerCase() === low || m.aliases.includes(low)) return m.label;
   }
-  return s; // pass through (full label or a model newer than this list)
+  return String(s).trim();
+}
+// The effective default: env AGY_DEFAULT_MODEL (alias or label) if set, else builtin.
+function defaultModel() {
+  const env = process.env.AGY_DEFAULT_MODEL;
+  if (env && String(env).trim()) return aliasToLabel(env);
+  return BUILTIN_DEFAULT_MODEL;
+}
+// Resolve an alias / full label / undefined into a concrete label.
+function resolveModel(input) {
+  if (!input || !String(input).trim()) return defaultModel();
+  return aliasToLabel(input);
 }
 // Read the model agy actually propagated to the backend, from cli.log (ground truth,
 // not the model's self-report). Lets us tell the user if their pick fell back.
@@ -364,15 +375,20 @@ async function cmdSetup() {
 function cmdModels() {
   const sf = settingsFile();
   let curModel = null; try { if (sf) curModel = JSON.parse(readFileSync(sf, "utf8")).model; } catch {}
-  console.log(`Default model (used when --model is omitted): ${DEFAULT_MODEL}`);
+  const envSet = process.env.AGY_DEFAULT_MODEL && String(process.env.AGY_DEFAULT_MODEL).trim();
+  const src = envSet ? `from env AGY_DEFAULT_MODEL="${process.env.AGY_DEFAULT_MODEL}"` : "built-in";
+  console.log(`Default model (used when --model is omitted): ${defaultModel()}  [${src}]`);
   console.log(`Your settings.json model (interactive default): ${curModel || "(unset)"}`);
   console.log("");
   console.log("Known models (pass the label or any alias to --model):");
   for (const m of KNOWN_MODELS) console.log(`  ${m.label.padEnd(26)} aliases: ${m.aliases.join(", ")}`);
   console.log("");
-  console.log("You can also pass ANY exact label (e.g. a future \"Gemini 3.5 Pro (High)\")");
-  console.log("— it works as soon as the backend offers it. Unknown labels fall back to a");
-  console.log("Flash tier; every run reports the model actually used.");
+  console.log("Change the DEFAULT permanently (no file edits, survives updates): set env");
+  console.log("  AGY_DEFAULT_MODEL  to a label or alias, e.g.  AGY_DEFAULT_MODEL=flash");
+  console.log("  or  AGY_DEFAULT_MODEL=\"Gemini 3.5 Pro (High)\"  (once it ships).");
+  console.log("You can also pass ANY exact label to --model per call — it works as soon as");
+  console.log("the backend offers it. Unknown labels fall back to Flash; each run reports the");
+  console.log("model actually used.");
   return 0;
 }
 function cmdStatus() {

@@ -43,12 +43,17 @@ Subcommands: ask, task (write), research, review (read-only), adversarial-review
 ## Model selection
 
 Every command takes `--model <alias|label>`. Default is the strongest Pro
-(`Gemini 3.1 Pro (High)`). agy has no `--model` CLI flag, so the companion sets the
-model by briefly rewriting `~/.gemini/antigravity-cli/settings.json`'s `model` field,
-running, then restoring it (serialized by a lock; the user's value is always restored,
-even on error/timeout — verified). The model that actually answered is read back from
-cli.log and reported on stderr — relay it.
+(`Gemini 3.1 Pro (High)`), overridable via env `AGY_DEFAULT_MODEL` (see below). agy has
+no `--model` CLI flag, so the companion sets the model by briefly rewriting
+`~/.gemini/antigravity-cli/settings.json`'s `model` field, running, then restoring it
+(serialized by a lock; the user's value is always restored, even on error/timeout —
+verified). The model that actually answered is read back from cli.log and reported on
+stderr — relay it.
 
+- **Default override**: env `AGY_DEFAULT_MODEL` (alias or label) changes the default
+  with no file edits and survives plugin updates; per-call `--model` still wins. If a
+  user asks to "always use X" or "change the default model", point them to this env var
+  (`setx AGY_DEFAULT_MODEL …` on Windows) rather than editing the script.
 - Aliases: `pro` / `pro-high` → Gemini 3.1 Pro (High); `flash` → Gemini 3.5 Flash (High);
   also `pro-medium`, `pro-low`, `flash-medium`, `flash-low`, and `3.1-pro` etc.
 - You may pass ANY exact label, including a model newer than the built-in list (e.g. a
